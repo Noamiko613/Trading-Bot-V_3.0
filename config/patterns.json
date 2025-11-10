@@ -14,18 +14,18 @@
     }
   },
   "pattern_weights": {
-    "golden_cross": 1.2,
-    "death_cross": 1.2,
+    "golden_cross": 1.3,
+    "death_cross": 1.3,
     "macd_cross": 0.0,
-    "macd_divergence": 1.3,
-    "rsi_divergence": 1.3,
-    "head_shoulders": 1.1,
-    "double_top_bottom": 1.1,
-    "bull_flag": 1.0,
-    "triangle_breakout": 1.0,
-    "bullish_engulfing": 0.9,
-    "hammer": 0.8,
-    "confluence_engine": 1.4
+    "macd_divergence": 1.4,
+    "rsi_divergence": 1.4,
+    "head_shoulders": 1.2,
+    "double_top_bottom": 1.2,
+    "bull_flag": 1.1,
+    "triangle_breakout": 1.1,
+    "bullish_engulfing": 1.0,
+    "hammer": 0.9,
+    "confluence_engine": 1.5
   },
   "pattern_enabled": {
     "golden_cross": true,
@@ -55,8 +55,9 @@
   "filters": {
     "volume_confirmation": {
       "enabled": true,
-      "min_volume_spike_pct": 15,
-      "lookback_periods": 20
+      "min_volume_spike_pct": 20,
+      "lookback_periods": 20,
+      "require_volume_trend": true
     },
     "atr_filter": {
       "enabled": true,
@@ -66,8 +67,9 @@
     },
     "adx_trend_filter": {
       "enabled": true,
-      "min_adx": 22,
-      "period": 14
+      "min_adx": 20,
+      "period": 14,
+      "prefer_strong_trends": true
     }
   }
 }

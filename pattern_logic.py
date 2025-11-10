@@ -852,9 +852,9 @@ def decide_trade_signals(df):
         if risk_per_unit <= 0:
             return
         
-        # LAYER 3: Dynamic RR based on confidence (minimum 2:1 R:R)
+        # LAYER 3: Dynamic RR based on confidence (minimum 1.8:1 R:R for better trade opportunities)
         if base_rr is None:
-            base_rr = 2.0  # Default MIN_RR (increased from 1.3)
+            base_rr = 1.8  # Default MIN_RR (optimized for profitability)
         
         # Calculate confidence based on pattern strength and confirmations
         confidence = 70  # Base confidence (matching new threshold)
@@ -867,8 +867,8 @@ def decide_trade_signals(df):
         try:
             from core.risk_manager import get_dynamic_rr_target
             rr = get_dynamic_rr_target(confidence)
-            # Ensure minimum 2:1 R:R
-            rr = max(rr, 2.0)
+            # Ensure minimum 1.8:1 R:R (optimized for better trade opportunities)
+            rr = max(rr, 1.8)
         except:
             rr = base_rr
         

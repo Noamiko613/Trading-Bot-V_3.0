@@ -59,15 +59,15 @@
   },
   "session_multipliers": {
     "high_liquidity": 1.0,
-    "medium_liquidity": 0.95,
-    "low_liquidity": 0.5,
-    "weekend": 0.5
+    "medium_liquidity": 0.92,
+    "low_liquidity": 0.6,
+    "weekend": 0.6
   },
   "position_multipliers": {
     "high_liquidity": 1.0,
-    "medium_liquidity": 0.9,
-    "low_liquidity": 0.0,
-    "weekend": 0.0
+    "medium_liquidity": 0.85,
+    "low_liquidity": 0.5,
+    "weekend": 0.5
   },
   "weekend_avoidance": true,
   "trading_rules": {

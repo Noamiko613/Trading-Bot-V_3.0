@@ -800,6 +800,120 @@ project/
 
 ---
 
+## 🔧 System Architecture & How It Works
+
+This section provides a comprehensive explanation of how the trading bot system works, from data collection to trade execution, without code examples.
+
+### System Overview
+
+The trading bot is a multi-layered system that continuously monitors cryptocurrency markets, detects trading patterns, evaluates trade opportunities, and executes trades based on a sophisticated decision-making framework. The system operates in real-time, processing market data, applying technical analysis, and making trading decisions autonomously.
+
+### Data Collection & Processing
+
+**Market Data Fetching**: The system connects to CoinEx exchange through the CCXT library to fetch real-time and historical price data. Each trading pair (symbol) is monitored across multiple timeframes simultaneously, from 1-minute charts for scalping opportunities to daily charts for swing trading. The data includes open, high, low, close prices, and trading volume for each time period.
+
+**Data Storage**: Market data is stored in rolling JSON files, one per symbol and timeframe combination. This allows the system to maintain a historical context while keeping memory usage manageable. The system continuously updates these files with new candle data as it becomes available.
+
+**Data Normalization**: Before analysis, the system normalizes symbol formats (converting between exchange formats like BTC-USDT and BTC/USDT), ensures data consistency, and handles missing or corrupted data points gracefully.
+
+### Pattern Detection System
+
+**Technical Indicator Calculation**: The system calculates a comprehensive set of technical indicators for each timeframe, including moving averages (MA50, MA200), exponential moving averages (EMA12, EMA26, EMA21), MACD (Moving Average Convergence Divergence), RSI (Relative Strength Index), ATR (Average True Range), ADX (Average Directional Index), and VWAP (Volume Weighted Average Price). These indicators form the foundation for pattern recognition.
+
+**Pattern Recognition**: The bot scans for over 15 different technical patterns, categorized into trend patterns (Golden Cross, Death Cross), momentum patterns (MACD crossovers, RSI divergences), chart patterns (Bull Flags, Triangles, Head & Shoulders), and candlestick patterns (Engulfing, Hammer). Each pattern has specific detection criteria based on price action, indicator values, and volume characteristics.
+
+**Pattern Verification**: Detected patterns are not immediately traded. Instead, they enter a verification queue where additional checks are performed. This includes multi-timeframe confirmation (ensuring higher timeframes align with the trade direction), volume confirmation (ensuring sufficient trading volume), and trend strength validation (using ADX to confirm market is trending).
+
+**Confluence Engine**: A specialized component identifies support and resistance zones using pivot points, Fibonacci levels, and volume clusters. When price approaches these zones with a matching pattern, the system generates a confluence signal, which carries higher confidence than standalone patterns.
+
+### Confidence Scoring System
+
+**Component-Based Scoring**: Every potential trade receives a confidence score from 0 to 100, calculated using seven weighted components. Pattern structure quality (25% weight) evaluates how clear and well-formed the pattern is. Trend alignment (15%) checks if higher timeframes support the trade direction. Momentum confirmation (15%) verifies that momentum indicators agree with the pattern. Volume confirmation (10%) ensures adequate trading volume. Location context (15%) evaluates whether price is near key levels like support/resistance or moving averages. Risk-reward geometry (10%) assesses the quality of the stop-loss and take-profit placement. Session context (5%) adjusts based on current market session quality.
+
+**Confidence Calculation**: Each component is normalized to a 0-1 scale, multiplied by its weight, and summed to produce a raw confidence score. This score is then multiplied by 100 to get a percentage. The system applies session multipliers (high liquidity sessions get full confidence, while low liquidity sessions reduce confidence) to produce the final confidence value.
+
+**Machine Learning Enhancement**: Once the system has collected enough trade data (typically 50+ trades), a machine learning model begins to refine confidence scores. The ML model analyzes historical pattern performance, considering factors like time of day, volatility levels, and pattern characteristics. However, ML adjustments are bounded (initially ±5%) to prevent over-reliance on the model, ensuring the system remains grounded in technical analysis.
+
+### Trade Decision Logic
+
+**Multi-Layer Filtering**: Before a trade is executed, it must pass through multiple layers of filters. Layer 1 includes global thresholds like minimum confidence (typically 55-65%), minimum risk-reward ratio (1.3-1.8:1), and multi-timeframe confirmation requirements. Layer 2 applies the confidence scoring system. Layer 3 determines dynamic risk-reward targets based on confidence levels. Layer 4 applies ML adjustments if available. Layer 5 adjusts for session quality. Layer 6 checks account-level protections.
+
+**Session-Aware Trading**: The system recognizes that cryptocurrency markets, while trading 24/7, still follow traditional finance session patterns for liquidity and volatility. High liquidity sessions (US market open, London-US overlap) allow full position sizes and standard confidence thresholds. Medium liquidity sessions (Asia open) require slightly higher confidence. Low liquidity sessions (late Asia, pre-market) require significantly higher confidence and reduce position sizes. Weekend sessions are treated with extra caution.
+
+**Risk Management Integration**: Every trade decision considers current account equity, open positions, daily profit/loss, and drawdown levels. The system enforces maximum concurrent trades, maximum total exposure, daily loss limits, and kill-switch mechanisms. If account drawdown exceeds soft limits (10-15%), position sizes are reduced. If hard limits are reached (15-25%), trading is halted entirely.
+
+### Position Sizing & Risk Calculation
+
+**Dynamic Position Sizing**: Position sizes are not fixed but dynamically calculated based on multiple factors. The base risk per trade is typically 0.15-0.25% of account equity. This base risk is then scaled based on confidence level - higher confidence trades can use slightly larger positions (up to 0.3%), while lower confidence trades use smaller positions (down to 0.1%). The system also considers session quality, reducing position sizes during low-liquidity periods.
+
+**Risk Per Unit Calculation**: For each trade, the system calculates the risk per unit by determining the distance between entry price and stop-loss price. This risk distance, combined with the desired risk percentage of account equity, determines the position size. The formula ensures that if the stop-loss is hit, the loss will be exactly the predetermined risk percentage, regardless of position size.
+
+**Volatility Adjustment**: Position sizes are adjusted for market volatility using ATR (Average True Range). In highly volatile markets, stop-losses are wider, so position sizes are reduced to maintain the same dollar risk. In calm markets, stop-losses are tighter, allowing slightly larger positions for the same risk.
+
+### Entry, Stop-Loss, and Take-Profit Placement
+
+**Entry Price Determination**: Entry prices are typically set at the current market price (market orders) or slightly better prices (limit orders) depending on exchange capabilities. The system accounts for slippage (the difference between expected and actual execution price) and trading fees in its calculations.
+
+**Stop-Loss Placement**: Stop-losses are placed using multiple methods. ATR-based stops use a multiple of the Average True Range to set stop distance, ensuring stops adapt to volatility. Structure-based stops are placed just beyond recent swing highs or lows. The system ensures stops are not too tight (which would cause premature exits) or too wide (which would risk too much capital).
+
+**Take-Profit Calculation**: Take-profit levels are calculated using dynamic risk-reward ratios that vary with confidence. Lower confidence trades (60-65%) target 1.8-2.0:1 risk-reward ratios. Medium confidence trades (70-75%) target 2.2-2.5:1 ratios. High confidence trades (80-90%+) target 2.8-3.5:1 ratios. The system recalculates the actual risk-reward ratio after all adjustments to ensure accuracy.
+
+**Trailing Stops**: Once a trade moves into profit by a certain amount (typically 1.2R, meaning 1.2 times the initial risk), the system can activate trailing stops. These stops move with the price in the profitable direction, locking in profits while allowing the trade to continue if the trend persists.
+
+### Trade Execution
+
+**Order Placement**: When a trade passes all filters and checks, the system prepares an order. For paper trading, the order is sent to a simulator that tracks performance without using real money. For live trading, the order is sent to CoinEx exchange through their API. The system ensures orders meet exchange minimum requirements (typically $1 USD minimum order size).
+
+**Order Types**: The system primarily uses bracket orders when supported by the exchange, which simultaneously place entry, stop-loss, and take-profit orders. If bracket orders aren't available, the system places separate orders for each component, ensuring risk management is always in place.
+
+**Execution Monitoring**: After order placement, the system continuously monitors open positions, checking if stop-losses or take-profits have been hit. It also tracks running profit/loss, maximum favorable excursion (how much profit was available), and maximum adverse excursion (how much drawdown occurred before exit).
+
+### Performance Tracking & Analytics
+
+**Trade Logging**: Every trade is logged with comprehensive details including entry/exit prices, position size, profit/loss, risk-reward ratio, pattern that triggered it, confidence level, and session information. This data is stored in JSONL format for easy analysis and machine learning training.
+
+**Performance Metrics**: The system calculates numerous performance metrics including win rate, average win/loss, profit factor (gross profit divided by gross loss), expectancy (average R-multiple), maximum drawdown, Sharpe ratio, and Sortino ratio. These metrics are tracked per symbol, per pattern, and overall.
+
+**Pattern Performance Analysis**: The system tracks which patterns are most profitable, which timeframes work best for each pattern, and how pattern performance varies by market conditions. This information is used to adjust pattern weights and confidence calculations over time.
+
+### Multi-Symbol Management
+
+**Symbol Configuration**: The system can trade multiple cryptocurrency pairs simultaneously, each with its own configuration including risk per trade, confidence thresholds, and enabled timeframes. This allows optimization for different market characteristics (e.g., Bitcoin might use different settings than altcoins).
+
+**Resource Management**: To prevent overwhelming the system or exchange API, the system manages resources carefully. It limits the number of concurrent API calls, uses efficient data structures, and implements rate limiting to respect exchange constraints.
+
+**Global Account Management**: All symbols share a single account balance and equity. The system tracks total exposure across all symbols, ensuring that combined risk never exceeds account-level limits. This prevents over-leveraging when trading multiple pairs simultaneously.
+
+### Error Handling & Resilience
+
+**Network Resilience**: The system handles network interruptions, API timeouts, and exchange maintenance gracefully. It implements retry logic with exponential backoff, caches recent data to continue operating during brief outages, and logs all errors for debugging.
+
+**Data Validation**: Before making trading decisions, the system validates all data for completeness, consistency, and reasonableness. It checks for missing candles, suspicious price movements, and data anomalies that might indicate errors.
+
+**Fail-Safe Mechanisms**: Multiple fail-safe mechanisms protect against catastrophic errors. The kill-switch halts trading if drawdown exceeds limits. Daily loss limits prevent excessive losses in a single day. Maximum position size limits prevent oversized trades. All these mechanisms work independently to provide redundant protection.
+
+### Continuous Learning & Adaptation
+
+**Pattern Lifecycle Management**: The system tracks the performance of each pattern type over time. Patterns that consistently underperform have their weights reduced or are disabled. Patterns that perform well receive higher weights and confidence boosts.
+
+**Market Regime Detection**: The system attempts to detect different market regimes (trending, ranging, volatile, calm) and adjusts strategy parameters accordingly. For example, in ranging markets, it might favor mean-reversion patterns, while in trending markets, it favors momentum patterns.
+
+**Parameter Optimization**: Based on historical performance, the system can suggest parameter optimizations. However, these suggestions are conservative to avoid over-optimization (curve-fitting), which can lead to poor performance on new data.
+
+### Integration Points
+
+**Exchange Integration**: The system integrates with CoinEx exchange through the CCXT library, which provides a unified interface to multiple exchanges. This abstraction allows the system to work with different exchanges with minimal code changes.
+
+**Database Storage**: Trade history, account state, and performance metrics are stored in SQLite databases. This provides persistent storage that survives system restarts and allows for historical analysis.
+
+**Logging System**: Comprehensive logging captures all system events, trade decisions, errors, and performance metrics. Logs are structured (JSON format) for easy parsing and analysis, and are rotated to prevent disk space issues.
+
+**Configuration Management**: All system parameters are stored in JSON configuration files, allowing easy adjustment without code changes. Environment variables provide runtime overrides for sensitive settings like API keys and trading modes.
+
+This architecture creates a robust, adaptive trading system that can operate autonomously while maintaining strict risk controls and continuously improving through performance analysis and machine learning enhancements.
+
+---
+
 ## 📝 Changelog
 
 ### Version 2.0 (December 2024)

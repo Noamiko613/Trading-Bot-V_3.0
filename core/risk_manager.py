@@ -59,20 +59,35 @@ def adjust_setup_for_volatility(setup: Dict, atr: float, atr_multiplier_sl: floa
 def get_dynamic_rr_target(confidence: float) -> float:
     """
     LAYER 3: Dynamic RR targeting based on confidence.
-    Updated to match new risk.json configuration:
+    More granular thresholds for better profitability:
+    - confidence < 60 → target RR = 1.8
     - confidence < 65 → target RR = 2.0
-    - confidence < 80 → target RR = 2.5
-    - confidence >= 80 → target RR = 3.0
+    - confidence < 70 → target RR = 2.2
+    - confidence < 75 → target RR = 2.5
+    - confidence < 80 → target RR = 2.8
+    - confidence < 85 → target RR = 3.0
+    - confidence < 90 → target RR = 3.2
+    - confidence >= 90 → target RR = 3.5
     """
     config = _load_risk_config()
     rr_config = config.get('take_profit', {}).get('dynamic_rr', {})
     
-    if confidence < 65:
+    if confidence < 60:
+        return float(rr_config.get('confidence_60', 1.8))
+    elif confidence < 65:
         return float(rr_config.get('confidence_65', 2.0))
+    elif confidence < 70:
+        return float(rr_config.get('confidence_70', 2.2))
+    elif confidence < 75:
+        return float(rr_config.get('confidence_75', 2.5))
     elif confidence < 80:
-        return float(rr_config.get('confidence_80', 2.5))
+        return float(rr_config.get('confidence_80', 2.8))
+    elif confidence < 85:
+        return float(rr_config.get('confidence_85', 3.0))
+    elif confidence < 90:
+        return float(rr_config.get('confidence_90', 3.2))
     else:
-        return float(rr_config.get('confidence_90', 3.0))
+        return 3.5  # Very high confidence trades get best RR
 
 
 def check_account_limits(current_equity: float, initial_equity: float, 
