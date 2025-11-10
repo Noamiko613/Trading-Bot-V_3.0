@@ -1,0 +1,10 @@
+{
+  "timestamp": "2025-11-10T06:45:19.317528",
+  "balance": 100000.0,
+  "equity": 100000.0,
+  "max_equity": 100000.0,
+  "min_equity": 100000.0,
+  "max_drawdown_pct": 0.0,
+  "open_trades": [],
+  "closed_trades": []
+}

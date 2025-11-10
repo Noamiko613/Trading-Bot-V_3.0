@@ -1,0 +1,49 @@
+{
+  "max_drawdown_pct": 15.0,
+  "risk_per_trade_pct": 0.15,
+  "max_concurrent_trades": 5,
+  "max_daily_trades": 15,
+  "max_daily_loss_pct": 1.5,
+  "max_total_exposure_pct": 1.2,
+  "kill_switch": {
+    "soft_drawdown_pct": 10.0,
+    "hard_drawdown_pct": 15.0,
+    "enabled": true
+  },
+  "stop_loss": {
+    "scalp_atr_multiplier": 1.5,
+    "swing_atr_multiplier": 2.5,
+    "min_pct": 0.5,
+    "max_pct": 3.0
+  },
+  "take_profit": {
+    "min_rr_ratio": 2.0,
+    "target_rr_ratio": 2.5,
+    "max_rr_ratio": 4.0,
+    "dynamic_rr": {
+      "enabled": true,
+      "confidence_65": 2.0,
+      "confidence_75": 2.5,
+      "confidence_85": 3.0
+    }
+  },
+  "trailing_stop": {
+    "enabled": true,
+    "activate_after_r_multiple": 1.2,
+    "lock_in_r_multiple": 0.3
+  },
+  "position_sizing": {
+    "method": "volatility_adjusted",
+    "kelly_fraction": 0.25,
+    "max_position_pct": 10.0,
+    "min_confidence": 65,
+    "base_risk_pct": 0.0012,
+    "max_risk_pct": 0.002
+  },
+  "cooldown": {
+    "enabled": true,
+    "consecutive_losses_threshold": 3,
+    "cooldown_hours": 2,
+    "max_trades_per_day": 15
+  }
+}

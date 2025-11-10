@@ -1,0 +1,18 @@
+{
+  "symbol": "BTC-USDT",
+  "mode": "spot",
+  "timeframes": [
+    "1min",
+    "5min",
+    "15min",
+    "30min",
+    "1h",
+    "4h"
+  ],
+  "operating_mode": "hybrid",
+  "moderation_mode": "balanced",
+  "trading_mode": "balanced",
+  "paper_trading": true,
+  "leverage": 20,
+  "margin_mode": "isolated"
+}

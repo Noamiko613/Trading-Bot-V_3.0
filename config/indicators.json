@@ -1,0 +1,37 @@
+{
+  "ma": {
+    "short_period": 50,
+    "long_period": 200
+  },
+  "ema": {
+    "periods": [
+      5,
+      8,
+      13,
+      21,
+      50,
+      200
+    ]
+  },
+  "rsi": {
+    "period": 14,
+    "overbought": 70,
+    "oversold": 30
+  },
+  "macd": {
+    "fast_period": 12,
+    "slow_period": 26,
+    "signal_period": 9
+  },
+  "atr": {
+    "period": 14
+  },
+  "bollinger_bands": {
+    "period": 20,
+    "std_dev": 2.0
+  },
+  "volume": {
+    "sma_period": 20,
+    "threshold_factor": 0.6
+  }
+}

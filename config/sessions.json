@@ -1,0 +1,90 @@
+{
+  "sessions": [
+    {
+      "name": "london",
+      "utc_open": "07:00",
+      "utc_close": "11:00",
+      "enabled": true,
+      "strategy_type": "momentum_breakouts"
+    },
+    {
+      "name": "new_york",
+      "utc_open": "12:00",
+      "utc_close": "17:00",
+      "enabled": true,
+      "strategy_type": "scalping_trend_continuations"
+    },
+    {
+      "name": "asian",
+      "utc_open": "23:00",
+      "utc_close": "03:00",
+      "enabled": false,
+      "strategy_type": "mean_reversion"
+    }
+  ],
+  "overlap_bias": {
+    "london_new_york": {
+      "start": "12:00",
+      "end": "16:00",
+      "momentum_bias": 1.3
+    }
+  },
+  "liquidity_blackouts": [
+    {
+      "start": "02:00",
+      "end": "06:00",
+      "reason": "low_liquidity"
+    }
+  ],
+  "limits": {
+    "max_trades_per_session": 8
+  },
+  "risk_factors": {
+    "high_liquidity": 1.0,
+    "medium_liquidity": 0.8,
+    "low_liquidity": 0.0,
+    "weekend": 0.0
+  },
+  "confidence_thresholds": {
+    "high_liquidity": 65,
+    "medium_liquidity": 68,
+    "low_liquidity": 72,
+    "weekend": 75
+  },
+  "confidence_adjustments": {
+    "high_liquidity": 0,
+    "medium_liquidity": 3,
+    "low_liquidity": 30,
+    "weekend": 30
+  },
+  "session_multipliers": {
+    "high_liquidity": 1.0,
+    "medium_liquidity": 0.95,
+    "low_liquidity": 0.5,
+    "weekend": 0.5
+  },
+  "position_multipliers": {
+    "high_liquidity": 1.0,
+    "medium_liquidity": 0.9,
+    "low_liquidity": 0.0,
+    "weekend": 0.0
+  },
+  "weekend_avoidance": true,
+  "trading_rules": {
+    "london": {
+      "allow_trend_entries": true,
+      "allow_scalps": false,
+      "allow_mean_reversion": false
+    },
+    "new_york": {
+      "allow_trend_entries": true,
+      "allow_scalps": true,
+      "allow_mean_reversion": false
+    },
+    "asian": {
+      "allow_trend_entries": false,
+      "allow_scalps": false,
+      "allow_mean_reversion": false
+    }
+  }
+}

@@ -1,0 +1,41 @@
+# Core Data Processing
+pandas
+numpy
+
+# Exchange APIs and WebSockets
+ccxt
+websockets
+requests
+
+# Machine Learning (for pattern scoring and optimization)
+scikit-learn
+scipy
+
+# Technical Analysis
+ta-lib # Note: May require manual installation on Windows
+pandas-ta
+
+# Database
+# sqlite3 is built-in with Python, no need to install
+
+# Configuration and Environment
+python-dotenv
+
+# Visualization (optional, for analytics)
+matplotlib
+plotly
+
+# Utilities
+python-dateutil
+pytz
+
+# Testing (optional but recommended)
+pytest
+pytest-cov
+
+# Performance Monitoring
+psutil
+
+# Async Support
+aiohttp
+# asyncio is built-in with Python 3.7+

@@ -1,0 +1,72 @@
+{
+  "name": "Aggressive Daily Trading Configuration",
+  "description": "Optimized settings for daily cryptocurrency trading with higher frequency and more opportunities",
+  
+  "operating_mode": "hybrid",
+  "moderation_mode": "aggressive",
+  "trading_mode": "aggressive",
+  
+  "weights": {
+    "pattern": 0.6,
+    "session": 0.4
+  },
+  
+  "thresholds": {
+    "buy": 35,
+    "sell": 35
+  },
+  
+  "confidence_settings": {
+    "base_confidence_boost": 15,
+    "volume_confidence_multiplier": 1.2,
+    "confluence_confidence_boost": 10,
+    "multi_tf_confidence_boost": 5
+  },
+  
+  "session_settings": {
+    "high_liquidity": {
+      "confidence_threshold": 40,
+      "position_multiplier": 1.0,
+      "max_trades_per_hour": 3
+    },
+    "medium_liquidity": {
+      "confidence_threshold": 50,
+      "position_multiplier": 0.8,
+      "max_trades_per_hour": 2
+    },
+    "low_liquidity": {
+      "confidence_threshold": 60,
+      "position_multiplier": 0.6,
+      "max_trades_per_hour": 1
+    },
+    "weekend": {
+      "confidence_threshold": 70,
+      "position_multiplier": 0.4,
+      "max_trades_per_hour": 1
+    }
+  },
+  
+  "risk_settings": {
+    "max_concurrent_trades": 8,
+    "max_daily_trades": 25,
+    "risk_per_trade": 0.008,
+    "max_drawdown_pct": 15.0,
+    "stop_loss_multiplier": 0.8,
+    "take_profit_multiplier": 1.5
+  },
+  
+  "pattern_settings": {
+    "volume_requirement": 0.6,
+    "multi_tf_confirmation": false,
+    "confluence_required": false,
+    "min_pattern_strength": 0.3
+  },
+  
+  "confluence_settings": {
+    "swing_window": 10,
+    "zone_merge_tolerance": 1.5,
+    "fib_tolerance": 2.5,
+    "volume_multiplier": 0.8,
+    "first_test_allowed": true
+  }
+}

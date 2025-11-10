@@ -1,0 +1,142 @@
+{
+  "trading_settings": {
+    "auto_train_ml": true,
+    "min_trades_for_ml": 50,
+    "operating_mode": "hybrid",
+    "moderation_mode": "balanced",
+    "trading_mode": "balanced"
+  },
+  "notes": "Paper trading is controlled by TRADE_LIVE environment variable in .env file. Set TRADE_LIVE=0 for paper trading, TRADE_LIVE=1 for live trading. Configuration optimized for 10 top-volume pairs with balanced risk/reward - sweet spot between safety and profitability.",
+  "symbols": [
+    {
+      "symbol": "BTC-USDT",
+      "enabled": true,
+      "timeframes": ["5min", "15min", "1h", "4h"],
+      "risk_per_trade_pct": 0.18,
+      "max_concurrent_trades": 2,
+      "custom_settings": {
+        "confidence_threshold": 65,
+        "volume_threshold": 0.75,
+        "position_size_multiplier": 1.0,
+        "rr_target": 2.5
+      }
+    },
+    {
+      "symbol": "ETH-USDT",
+      "enabled": true,
+      "timeframes": ["5min", "15min", "1h", "4h"],
+      "risk_per_trade_pct": 0.18,
+      "max_concurrent_trades": 2,
+      "custom_settings": {
+        "confidence_threshold": 65,
+        "volume_threshold": 0.75,
+        "position_size_multiplier": 1.0,
+        "rr_target": 2.5
+      }
+    },
+    {
+      "symbol": "BNB-USDT",
+      "enabled": true,
+      "timeframes": ["5min", "15min", "1h", "4h"],
+      "risk_per_trade_pct": 0.16,
+      "max_concurrent_trades": 2,
+      "custom_settings": {
+        "confidence_threshold": 66,
+        "volume_threshold": 0.78,
+        "position_size_multiplier": 0.95,
+        "rr_target": 2.5
+      }
+    },
+    {
+      "symbol": "SOL-USDT",
+      "enabled": true,
+      "timeframes": ["15min", "1h", "4h"],
+      "risk_per_trade_pct": 0.16,
+      "max_concurrent_trades": 2,
+      "custom_settings": {
+        "confidence_threshold": 66,
+        "volume_threshold": 0.78,
+        "position_size_multiplier": 0.95,
+        "rr_target": 2.5
+      }
+    },
+    {
+      "symbol": "XRP-USDT",
+      "enabled": true,
+      "timeframes": ["15min", "1h", "4h"],
+      "risk_per_trade_pct": 0.15,
+      "max_concurrent_trades": 2,
+      "custom_settings": {
+        "confidence_threshold": 67,
+        "volume_threshold": 0.80,
+        "position_size_multiplier": 0.90,
+        "rr_target": 2.5
+      }
+    },
+    {
+      "symbol": "ADA-USDT",
+      "enabled": true,
+      "timeframes": ["15min", "1h", "4h"],
+      "risk_per_trade_pct": 0.15,
+      "max_concurrent_trades": 2,
+      "custom_settings": {
+        "confidence_threshold": 67,
+        "volume_threshold": 0.80,
+        "position_size_multiplier": 0.90,
+        "rr_target": 2.5
+      }
+    },
+    {
+      "symbol": "DOGE-USDT",
+      "enabled": true,
+      "timeframes": ["1h", "4h"],
+      "risk_per_trade_pct": 0.14,
+      "max_concurrent_trades": 1,
+      "custom_settings": {
+        "confidence_threshold": 68,
+        "volume_threshold": 0.82,
+        "position_size_multiplier": 0.85,
+        "rr_target": 3.0
+      }
+    },
+    {
+      "symbol": "AVAX-USDT",
+      "enabled": true,
+      "timeframes": ["1h", "4h"],
+      "risk_per_trade_pct": 0.14,
+      "max_concurrent_trades": 1,
+      "custom_settings": {
+        "confidence_threshold": 68,
+        "volume_threshold": 0.82,
+        "position_size_multiplier": 0.85,
+        "rr_target": 3.0
+      }
+    },
+    {
+      "symbol": "MATIC-USDT",
+      "enabled": true,
+      "timeframes": ["1h", "4h"],
+      "risk_per_trade_pct": 0.12,
+      "max_concurrent_trades": 1,
+      "custom_settings": {
+        "confidence_threshold": 68,
+        "volume_threshold": 0.85,
+        "position_size_multiplier": 0.80,
+        "rr_target": 3.0
+      }
+    },
+    {
+      "symbol": "LINK-USDT",
+      "enabled": true,
+      "timeframes": ["1h", "4h"],
+      "risk_per_trade_pct": 0.12,
+      "max_concurrent_trades": 1,
+      "custom_settings": {
+        "confidence_threshold": 68,
+        "volume_threshold": 0.85,
+        "position_size_multiplier": 0.80,
+        "rr_target": 3.0
+      }
+    }
+  ]
+}

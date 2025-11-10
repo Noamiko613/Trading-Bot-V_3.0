@@ -1,0 +1,224 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
+#   However, in case of collaboration, if having platform-specific dependencies or dependencies
+#   having no cross-platform support, pipenv may install dependencies that don't work, or not
+#   install all needed dependencies.
+#Pipfile.lock
+
+# PEP 582; used by e.g. github.com/David-OConnor/pyflow
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# Trading bot specific
+*.log
+config.ini
+secrets.json 
+# data
+# data/
+data/ada/1h.json
+data/ada/2h.json
+data/ada/4h.json
+data/ada/5min.json
+data/ada/6h.json
+data/ada/8h.json
+data/ada/12h.json
+data/ada/15min.json
+data/ada/30min.json
+data/bnb/1h.json
+data/bnb/2h.json
+data/bnb/4h.json
+data/bnb/5min.json
+data/bnb/6h.json
+data/bnb/8h.json
+data/bnb/12h.json
+data/bnb/15min.json
+data/bnb/30min.json
+data/btc/1h.json
+data/btc/2h.json
+data/btc/4h.json
+data/btc/5min.json
+data/btc/6h.json
+data/btc/8h.json
+data/btc/12h.json
+data/btc/15min.json
+data/btc/30min.json
+data/eth/1h.json
+data/eth/2h.json
+data/eth/4h.json
+data/eth/5min.json
+data/eth/6h.json
+data/eth/8h.json
+data/eth/12h.json
+data/eth/15min.json
+data/eth/30min.json
+data/fartcoin/1h.json
+data/fartcoin/2h.json
+data/fartcoin/4h.json
+data/fartcoin/5min.json
+data/fartcoin/15min.json
+data/fartcoin/30min.json
+data/sol/1h.json
+data/sol/2h.json
+data/sol/4h.json
+data/sol/5min.json
+data/sol/6h.json
+data/sol/8h.json
+data/sol/12h.json
+data/sol/15min.json
+data/sol/30min.json
+data/xrp/1h.json
+data/xrp/2h.json
+data/xrp/4h.json
+data/xrp/5min.json
+data/xrp/6h.json
+data/xrp/8h.json
+data/xrp/12h.json
+data/xrp/15min.json
+data/xrp/30min.json
+patterns_unverified/ADA-USDT/5min_patterns.jsonl
+patterns_unverified/ADA-USDT/all_patterns.jsonl
+patterns_unverified/BNB-USDT/5min_patterns.jsonl
+patterns_unverified/BNB-USDT/all_patterns.jsonl
+sim_results/global_account.db
+sim_results/global_status.json
+sim_results/trades.db
+sim_results/ADA-USDT/live_status.json
+sim_results/ADA-USDT/status.json
+sim_results/ADA-USDT/trade_log.json
+sim_results/BNB-USDT/live_status.json
+sim_results/BNB-USDT/status.json
+sim_results/BNB-USDT/trade_log.json
+sim_results/BTC-USDT/live_status.json
+sim_results/BTC-USDT/status.json
+sim_results/BTC-USDT/trade_log.json
+sim_results/ETH-USDT/live_status.json
+sim_results/ETH-USDT/status.json
+sim_results/ETH-USDT/trade_log.json
+sim_results/FARTCOIN-USDT/live_status.json
+sim_results/FARTCOIN-USDT/status.json
+sim_results/FARTCOIN-USDT/trade_log.json
+sim_results/SOL-USDT/live_status.json
+sim_results/SOL-USDT/status.json
+sim_results/SOL-USDT/trade_log.json
+sim_results/XRP-USDT/live_status.json
+sim_results/XRP-USDT/status.json
+sim_results/XRP-USDT/trade_log.json

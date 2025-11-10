@@ -1,0 +1,37 @@
+{
+  "default": "hybrid",
+  "weights": {
+    "pattern": 0.6,
+    "session": 0.4
+  },
+  "thresholds": {
+    "buy": 35,
+    "sell": 35
+  },
+  "moderation_modes": {
+    "strict": {
+      "confidence_threshold": 60,
+      "volume_multiplier": 1.2,
+      "confluence_required": true,
+      "multi_tf_strict": true
+    },
+    "balanced": {
+      "confidence_threshold": 40,
+      "volume_multiplier": 0.8,
+      "confluence_required": false,
+      "multi_tf_strict": false
+    },
+    "aggressive": {
+      "confidence_threshold": 30,
+      "volume_multiplier": 0.6,
+      "confluence_required": false,
+      "multi_tf_strict": false
+    }
+  },
+  "session_thresholds": {
+    "high_liquidity": 40,
+    "medium_liquidity": 50,
+    "low_liquidity": 60,
+    "weekend": 70
+  }
+}
