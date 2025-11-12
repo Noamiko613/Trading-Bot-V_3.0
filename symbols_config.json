@@ -3,8 +3,8 @@
     "auto_train_ml": true,
     "min_trades_for_ml": 50,
     "operating_mode": "hybrid",
-    "moderation_mode": "balanced",
-    "trading_mode": "balanced"
+    "moderation_mode": "aggressive",
+    "trading_mode": "aggressive"
   },
   "notes": "Paper trading is controlled by TRADE_LIVE environment variable in .env file. Set TRADE_LIVE=0 for paper trading, TRADE_LIVE=1 for live trading. Configuration optimized for 10 top-volume pairs with balanced risk/reward - sweet spot between safety and profitability.",
   "symbols": [
