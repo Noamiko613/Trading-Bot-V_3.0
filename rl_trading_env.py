@@ -208,7 +208,7 @@ class TradingEnv(gym.Env):
         """Load market data for training"""
         try:
             # Fetch latest candles
-            candles = self.data_fetcher.fetch_latest_closed(limit=self.lookback_window + 50)
+            candles = self.data_fetcher.get_kline_data(limit=self.lookback_window + 50)
             if candles:
                 df = pd.DataFrame(candles)
                 df['timestamp'] = pd.to_datetime(df['timestamp'])

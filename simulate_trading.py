@@ -239,7 +239,7 @@ class TradeSimulator:
         conn = sqlite3.connect(self.db_path)
         try:
             c = conn.cursor()
-            c.execute("INSERT OR REPLACE INTO trades_open (symbol, id, time, pattern, side, entry, stop, tp, rr, risk_pct, size, max_drawdown, min_runup, timeframe) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            c.execute("INSERT OR REPLACE INTO trades_open (symbol, id, time, pattern, side, entry, stop, tp, rr, risk_pct, size, max_drawdown, min_runup, timeframe) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                       (self.symbol, trade['id'], trade['time'], trade['pattern'], trade['side'], trade['entry'], trade['stop'], trade['tp'], trade['rr'], trade['risk_pct'], trade['size'], trade['max_drawdown'], trade['min_runup'], trade.get('timeframe')))
             conn.commit()
         finally:
