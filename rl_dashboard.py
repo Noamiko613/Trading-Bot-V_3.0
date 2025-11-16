@@ -19,8 +19,10 @@ from typing import Dict, List, Optional
 from pathlib import Path
 import numpy as np
 
-# Add parent directory for imports
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '.')))
+# Add script directory to path for imports
+script_dir = os.path.dirname(os.path.abspath(__file__))
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
 
 try:
     import torch

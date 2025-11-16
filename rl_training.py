@@ -9,6 +9,7 @@ Trains a neural network RL agent for trading with:
 """
 
 import os
+import sys
 import json
 import time
 import signal
@@ -16,6 +17,11 @@ import threading
 from datetime import datetime
 from typing import Dict, Optional
 from pathlib import Path
+
+# Add script directory to path for imports
+script_dir = os.path.dirname(os.path.abspath(__file__))
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
 
 import numpy as np
 

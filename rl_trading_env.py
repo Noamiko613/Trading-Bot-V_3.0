@@ -5,13 +5,20 @@ Reinforcement Learning Trading Environment
 Gym-style environment for training RL agents on trading tasks.
 """
 
+import os
+import sys
+
+# Add script directory to path for imports
+script_dir = os.path.dirname(os.path.abspath(__file__))
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
+
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional, Tuple
 import sqlite3
-import os
 from datetime import datetime, timedelta
 from coinEx_getting_data import CoinExDataFetcher
 from simulate_trading import TradeSimulator
