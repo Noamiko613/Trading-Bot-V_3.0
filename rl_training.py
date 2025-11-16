@@ -47,6 +47,7 @@ except ImportError as e:
 
 from rl_trading_env import TradingEnv
 from rl_progress_monitor import RLProgressMonitor
+from rl_dashboard import RLDashboard
 
 
 class TrainingState:
@@ -212,6 +213,9 @@ class RLTrainer:
         self.progress_monitor = None
         self.monitor_thread = None
         
+        # Dashboard
+        self.dashboard = None
+        
         # Environment
         self.env = None
         self.model = None
@@ -343,6 +347,18 @@ class RLTrainer:
             self.monitor_thread.start()
             print("[RL] Progress monitor started")
     
+    def start_dashboard(self):
+        """Start comprehensive dashboard"""
+        if self.dashboard is None:
+            self.dashboard = RLDashboard(
+                model_dir=str(self.model_dir),
+                state_file=str(self.state_manager.state_file),
+                update_interval=2.0
+            )
+            self.dashboard.set_model(self.model)
+            self.dashboard.start()
+            print("[RL] Dashboard started")
+    
     def train(self, total_timesteps: int = 1000000):
         """Train the RL agent"""
         # Create environment
@@ -353,6 +369,9 @@ class RLTrainer:
         
         # Start progress monitor
         self.start_progress_monitor()
+        
+        # Start comprehensive dashboard
+        self.start_dashboard()
         
         # Load state
         state = self.state_manager.get_state()
@@ -441,6 +460,10 @@ class RLTrainer:
                         'timesteps': current_timesteps,
                         'total_trades': total_trades
                     })
+                
+                # Update dashboard model
+                if self.dashboard:
+                    self.dashboard.update_model(self.model)
                 
                 print(f"\n[RL] Progress: {current_timesteps}/{total_timesteps} timesteps "
                       f"({current_timesteps/total_timesteps*100:.1f}%) - Trades: {total_trades}")
