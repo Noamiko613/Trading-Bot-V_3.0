@@ -20,9 +20,26 @@ import numpy as np
 try:
     import torch
     HAS_TORCH = True
-except ImportError:
+except (ImportError, OSError, RuntimeError) as e:
     HAS_TORCH = False
-    print("Warning: torch not available.")
+    error_msg = str(e)
+    if "DLL" in error_msg or "c10.dll" in error_msg or "1114" in error_msg:
+        print("\n" + "="*70)
+        print("ERROR: Torch DLL initialization failed (Windows)")
+        print("="*70)
+        print(f"Error: {type(e).__name__}: {error_msg}")
+        print("\nTo fix this issue, run:")
+        print("  python fix_torch_dll_error.py")
+        print("\nOr manually:")
+        print("1. Install Visual C++ Redistributables:")
+        print("   https://aka.ms/vs/17/release/vc_redist.x64.exe")
+        print("2. Reinstall torch (CPU-only):")
+        print("   pip uninstall torch -y")
+        print("   pip install torch --index-url https://download.pytorch.org/whl/cpu")
+        print("="*70 + "\n")
+    else:
+        print(f"Warning: torch not available ({type(e).__name__}: {e})")
+        print("RL training will work but NN visualization may be limited.")
 
 try:
     import matplotlib.pyplot as plt

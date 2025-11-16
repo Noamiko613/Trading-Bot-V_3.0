@@ -18,12 +18,32 @@ from typing import Dict, Optional
 from pathlib import Path
 
 import numpy as np
-import torch
-import torch.nn as nn
-from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
-from stable_baselines3.common.vec_env import DummyVecEnv
-from stable_baselines3.common.monitor import Monitor
+
+# Try to import torch - handle DLL errors on Windows
+try:
+    import torch
+    import torch.nn as nn
+    HAS_TORCH = True
+except (ImportError, OSError, RuntimeError) as e:
+    HAS_TORCH = False
+    print(f"Error: torch could not be loaded ({type(e).__name__}: {e})")
+    print("\nTo fix this issue:")
+    print("1. Install Visual C++ Redistributables: https://aka.ms/vs/17/release/vc_redist.x64.exe")
+    print("2. Reinstall torch: pip uninstall torch && pip install torch")
+    print("3. Or use CPU-only version: pip install torch --index-url https://download.pytorch.org/whl/cpu")
+    raise
+
+try:
+    from stable_baselines3 import PPO
+    from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
+    from stable_baselines3.common.vec_env import DummyVecEnv
+    from stable_baselines3.common.monitor import Monitor
+    HAS_SB3 = True
+except ImportError as e:
+    HAS_SB3 = False
+    print(f"Error: stable-baselines3 not available: {e}")
+    print("Install with: pip install stable-baselines3[extra]")
+    raise
 
 from rl_trading_env import TradingEnv
 from rl_progress_monitor import RLProgressMonitor
