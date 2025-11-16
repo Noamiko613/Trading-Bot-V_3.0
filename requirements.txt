@@ -39,3 +39,9 @@ psutil
 # Async Support
 aiohttp
 # asyncio is built-in with Python 3.7+
+
+# Reinforcement Learning
+stable-baselines3[extra]
+gymnasium
+torch
+tensorboard
