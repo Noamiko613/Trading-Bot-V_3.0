@@ -617,6 +617,212 @@ For each symbol, we maintain cumulative testing stats to date:
 
 All metrics are updated automatically whenever a trade closes, both in simulation and in the shared ledger paths, without changing the trading logic.
 
+---
+
+## 🤖 Reinforcement Learning (RL) Training
+
+The bot includes an advanced reinforcement learning system for training neural network-based trading agents using Proximal Policy Optimization (PPO).
+
+### RL System Components
+
+**Core Files**:
+- `rl_training.py`: Main training script with pause/resume functionality
+- `rl_trading_env.py`: Gym-style trading environment
+- `rl_progress_monitor.py`: Real-time training progress monitor
+- `rl_dashboard.py`: Comprehensive terminal-based dashboard
+
+**Features**:
+- Custom neural network architecture (512→512→256→128 layers)
+- Pause/Resume training with state persistence
+- Real-time progress monitoring and metrics
+- Model checkpointing every 10,000 steps
+- Integration with trading simulator
+
+### Starting RL Training
+
+**Basic Training Command**:
+```bash
+python rl_training.py --timesteps 1000000
+```
+
+**Advanced Options**:
+```bash
+python rl_training.py \
+  --symbol BTCUSDT \
+  --balance 100000.0 \
+  --timesteps 1000000 \
+  --max-trades 100 \
+  --model-dir models/rl_models
+```
+
+**Parameters**:
+- `--symbol`: Trading pair (default: BTCUSDT)
+- `--balance`: Starting balance (default: 100000.0)
+- `--timesteps`: Total training timesteps (default: 1000000)
+- `--max-trades`: Max trades per episode (default: None = unlimited)
+- `--model-dir`: Directory for model checkpoints (default: models/rl_models)
+
+### Pause and Resume Training
+
+**Pausing Training**:
+- Press `Ctrl+C` once during training to pause
+- The system will save the current state and checkpoint
+- Training can be paused at any time
+
+**Resuming Training**:
+- Simply run the same command again:
+  ```bash
+  python rl_training.py --timesteps 1000000
+  ```
+- The script automatically detects the saved state and resumes from the last checkpoint
+- All progress (episodes, timesteps, rewards) is preserved
+
+**How It Works**:
+- Training state is saved in `models/rl_training_state.json`
+- Model checkpoints are saved in `models/rl_models/checkpoints/`
+- The system tracks episode count, total timesteps, best reward, and total trades
+- Press `Ctrl+C` again while paused to resume training
+
+### Running the RL Dashboard
+
+**Starting the Dashboard**:
+
+While training is running, open a second terminal and run:
+```bash
+python rl_dashboard.py
+```
+
+Or start the dashboard with custom settings:
+```bash
+python rl_dashboard.py --model-dir models/rl_models --update-interval 2.0
+```
+
+**Dashboard Features**:
+- **Neural Network Visualization**: ASCII art representation of network architecture
+- **Training Metrics**: Real-time episode count, timesteps, rewards
+- **Performance Stats**: Win rate, profit factor, average reward
+- **Trade Statistics**: Total trades, successful trades, failed trades
+- **Session Analytics**: Performance by market session
+- **Live Updates**: Refreshes every 2 seconds (configurable)
+
+**Dashboard Display**:
+```
+╔══════════════════════════════════════════════════════════════════════════╗
+║                    RL TRADING DASHBOARD (LIVE)                           ║
+╚══════════════════════════════════════════════════════════════════════════╝
+
+Neural Network Architecture:
+Input (100) → FC(512) → ReLU → Dropout(0.1) → 
+FC(512) → ReLU → Dropout(0.1) → FC(256) → ReLU → 
+Dropout(0.1) → FC(128) → ReLU → Output(3)
+
+Total Parameters: 425,603
+
+Training Progress:
+├─ Episode: 245
+├─ Timesteps: 502,400 / 1,000,000 (50.2%)
+├─ Avg Reward: +12.45
+└─ Best Reward: +89.32
+
+Performance Metrics:
+├─ Win Rate: 58.4%
+├─ Profit Factor: 1.82
+├─ Total Trades: 1,247
+└─ Sharpe Ratio: 1.45
+```
+
+### Training Workflow
+
+**Complete Training Workflow**:
+
+1. **Start Training** (Terminal 1):
+   ```bash
+   cd c:\Users\noami\Documents\Trading-Bot-V_3.0
+   python rl_training.py --timesteps 1000000
+   ```
+
+2. **Monitor Dashboard** (Terminal 2):
+   ```bash
+   cd c:\Users\noami\Documents\Trading-Bot-V_3.0
+   python rl_dashboard.py
+   ```
+
+3. **Pause When Needed**:
+   - Press `Ctrl+C` in Terminal 1
+   - State is automatically saved
+
+4. **Resume Later**:
+   ```bash
+   python rl_training.py --timesteps 1000000
+   ```
+
+5. **View Tensorboard** (Optional, Terminal 3):
+   ```bash
+   tensorboard --logdir models/rl_models/tensorboard
+   ```
+
+### Model Files & Checkpoints
+
+**Directory Structure**:
+```
+models/rl_models/
+├── checkpoints/              # Periodic model checkpoints
+│   ├── rl_model_10000_steps.zip
+│   ├── rl_model_20000_steps.zip
+│   └── ...
+├── final_rl_model.zip       # Final trained model
+├── tensorboard/             # Tensorboard logs
+└── training_monitor.csv     # Training statistics
+
+models/rl_training_state.json  # Resume state file
+```
+
+**Checkpoint Frequency**:
+- Automatic checkpoint every 10,000 timesteps
+- State saved after each training chunk (50,000 timesteps)
+- Final model saved when training completes or is interrupted
+
+### RL Environment Details
+
+**Observation Space** (100 dimensions):
+- Price data: OHLCV for lookback window
+- Technical indicators: RSI, MACD, MA50, MA200, ATR
+- Portfolio state: Balance, position, P&L
+- Market context: Volatility, trend strength
+
+**Action Space** (3 discrete actions):
+- 0: Hold (do nothing)
+- 1: Buy (enter long position)
+- 2: Sell (close position)
+
+**Reward Function**:
+- Profit-based: Rewards profitable trades
+- Risk-adjusted: Penalizes excessive drawdown
+- Trade efficiency: Rewards quick profitable trades
+- Holding cost: Small penalty for holding losing positions
+
+### Training Tips
+
+**Recommended Settings**:
+- Start with 1M timesteps for initial training
+- Use default balance of 100,000 USDT
+- Enable unlimited trades (`--max-trades None`)
+- Monitor dashboard to track progress
+
+**Performance Optimization**:
+- Training uses GPU automatically if available (CUDA)
+- Falls back to CPU if GPU not available
+- Disable dashboard for faster training on slow machines
+- Reduce `--update-interval` for less frequent updates
+
+**Common Issues**:
+- **"No module named 'rl_progress_monitor'"**: Ensure you're running from the correct directory
+- **Torch DLL errors on Windows**: Run `python fix_torch_dll_error.py` to install dependencies
+- **Low training speed**: Check if GPU is detected, reduce neural network size if needed
+- **Memory issues**: Reduce batch size or lookback window
+
+---
+
 ## 📁 Project Structure
 
 ```
