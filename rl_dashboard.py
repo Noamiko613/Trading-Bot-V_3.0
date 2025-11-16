@@ -523,8 +523,35 @@ class RLDashboard:
 
 
 def main():
-    """Test dashboard standalone"""
-    dashboard = RLDashboard()
+    """Run dashboard standalone"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="RL Training Dashboard - Terminal Monitor")
+    parser.add_argument("--watch", "-w", type=float, default=2.0, 
+                       help="Update interval in seconds (default: 2.0)")
+    parser.add_argument("--model-dir", type=str, default="models/rl_models",
+                       help="Directory containing RL models (default: models/rl_models)")
+    parser.add_argument("--state-file", type=str, default="models/rl_training_state.json",
+                       help="Path to training state file (default: models/rl_training_state.json)")
+    parser.add_argument("--db-path", type=str, default="sim_results/trades.db",
+                       help="Path to trades database (default: sim_results/trades.db)")
+    
+    args = parser.parse_args()
+    
+    print(f"{Colors.BOLD}{Colors.CYAN}Starting RL Training Dashboard...{Colors.RESET}")
+    print(f"Update interval: {args.watch} seconds")
+    print(f"Model directory: {args.model_dir}")
+    print(f"State file: {args.state_file}")
+    print(f"Database: {args.db_path}")
+    print(f"\n{Colors.GRAY}Press Ctrl+C to stop{Colors.RESET}\n")
+    
+    dashboard = RLDashboard(
+        model_dir=args.model_dir,
+        state_file=args.state_file,
+        db_path=args.db_path,
+        update_interval=args.watch
+    )
+    
     dashboard.start()
     
     try:
@@ -532,7 +559,7 @@ def main():
             time.sleep(1)
     except KeyboardInterrupt:
         dashboard.stop()
-        print("\nDashboard stopped")
+        print(f"\n{Colors.BOLD}Dashboard stopped{Colors.RESET}")
 
 
 if __name__ == "__main__":
