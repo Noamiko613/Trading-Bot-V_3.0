@@ -1,12 +1,14 @@
 """
-RL Training Dashboard
-=====================
+RL Training Dashboard (Terminal-Only)
+======================================
 
 Comprehensive live dashboard for RL training showing:
 - Global and per-pair accuracy
-- Live neural network visualization with learning updates
+- Neural network architecture visualization (ASCII art)
 - Training metrics and statistics
 - Performance analytics
+
+All visualization is done in the terminal using ASCII art and ANSI colors.
 """
 
 import os
@@ -30,19 +32,23 @@ try:
 except (ImportError, OSError, RuntimeError):
     HAS_TORCH = False
 
-try:
-    import matplotlib.pyplot as plt
-    import matplotlib.gridspec as gridspec
-    from matplotlib.patches import Circle, FancyBboxPatch, FancyArrowPatch
-    import matplotlib.patches as mpatches
-    import matplotlib
-    matplotlib.use('TkAgg')
-    HAS_MATPLOTLIB = True
-except ImportError:
-    HAS_MATPLOTLIB = False
-    print("Warning: matplotlib not available. Dashboard will be text-only.")
-
 from utils.analytics import PerformanceAnalytics
+
+# ANSI color codes for terminal
+class Colors:
+    RESET = '\033[0m'
+    BOLD = '\033[1m'
+    RED = '\033[31m'
+    GREEN = '\033[32m'
+    YELLOW = '\033[33m'
+    BLUE = '\033[34m'
+    MAGENTA = '\033[35m'
+    CYAN = '\033[36m'
+    WHITE = '\033[37m'
+    GRAY = '\033[90m'
+    BRIGHT_GREEN = '\033[92m'
+    BRIGHT_YELLOW = '\033[93m'
+    BRIGHT_RED = '\033[91m'
 
 
 class RLDashboard:
@@ -101,71 +107,11 @@ class RLDashboard:
         self.update_thread = None
         self.lock = threading.Lock()
         
-        # Setup visualization
-        if HAS_MATPLOTLIB:
-            self._setup_figure()
-        else:
-            self.fig = None
-    
-    def _setup_figure(self):
-        """Setup matplotlib figure with multiple subplots"""
-        self.fig = plt.figure(figsize=(20, 12))
-        self.fig.suptitle('RL Training Dashboard - Live Monitoring', fontsize=16, fontweight='bold')
-        
-        # Create grid layout
-        gs = gridspec.GridSpec(3, 3, hspace=0.35, wspace=0.3, figure=self.fig)
-        
-        # Neural Network Visualization (top-left, spans 2 rows)
-        self.ax_nn = self.fig.add_subplot(gs[0:2, 0])
-        self.ax_nn.set_title('Neural Network Architecture (Live Learning)', fontsize=12, fontweight='bold')
-        self.ax_nn.axis('off')
-        
-        # Global Metrics (top-center)
-        self.ax_global = self.fig.add_subplot(gs[0, 1])
-        self.ax_global.set_title('Global Accuracy & Performance', fontsize=11, fontweight='bold')
-        self.ax_global.axis('off')
-        
-        # Per-Pair Metrics (top-right)
-        self.ax_pairs = self.fig.add_subplot(gs[0, 2])
-        self.ax_pairs.set_title('Per-Pair Performance', fontsize=11, fontweight='bold')
-        self.ax_pairs.axis('off')
-        
-        # Reward Plot (middle-center)
-        self.ax_reward = self.fig.add_subplot(gs[1, 1])
-        self.ax_reward.set_title('Episode Rewards', fontsize=10)
-        self.ax_reward.set_xlabel('Episode')
-        self.ax_reward.set_ylabel('Reward')
-        self.ax_reward.grid(True, alpha=0.3)
-        
-        # Loss Plot (middle-right)
-        self.ax_loss = self.fig.add_subplot(gs[1, 2])
-        self.ax_loss.set_title('Training Loss', fontsize=10)
-        self.ax_loss.set_xlabel('Update')
-        self.ax_loss.set_ylabel('Loss')
-        self.ax_loss.grid(True, alpha=0.3)
-        
-        # Accuracy Plot (bottom-left)
-        self.ax_accuracy = self.fig.add_subplot(gs[2, 0])
-        self.ax_accuracy.set_title('Accuracy Over Time', fontsize=10)
-        self.ax_accuracy.set_xlabel('Episode')
-        self.ax_accuracy.set_ylabel('Accuracy %')
-        self.ax_accuracy.grid(True, alpha=0.3)
-        
-        # Training Stats (bottom-center)
-        self.ax_stats = self.fig.add_subplot(gs[2, 1])
-        self.ax_stats.set_title('Training Statistics', fontsize=10, fontweight='bold')
-        self.ax_stats.axis('off')
-        
-        # PnL Plot (bottom-right)
-        self.ax_pnl = self.fig.add_subplot(gs[2, 2])
-        self.ax_pnl.set_title('Cumulative P&L', fontsize=10)
-        self.ax_pnl.set_xlabel('Episode')
-        self.ax_pnl.set_ylabel('P&L ($)')
-        self.ax_pnl.axhline(y=0, color='r', linestyle='--', alpha=0.5)
-        self.ax_pnl.grid(True, alpha=0.3)
-        
-        plt.ion()
-        plt.show(block=False)
+        # Terminal width for formatting
+        try:
+            self.terminal_width = os.get_terminal_size().columns
+        except:
+            self.terminal_width = 120
     
     def set_model(self, model):
         """Set the RL model for visualization"""
@@ -294,16 +240,8 @@ class RLDashboard:
         if self.model is not None:
             self._extract_nn_info()
     
-    def _draw_neural_network(self):
-        """Draw live neural network with learning visualization"""
-        if not HAS_MATPLOTLIB or self.ax_nn is None:
-            return
-        
-        self.ax_nn.clear()
-        self.ax_nn.axis('off')
-        self.ax_nn.set_title('Neural Network Architecture (Live Learning)', 
-                            fontsize=12, fontweight='bold', pad=20)
-        
+    def _draw_neural_network_ascii(self) -> str:
+        """Draw neural network as ASCII art"""
         try:
             layers = self.nn_info.get('layer_sizes', [])
             weights = self.nn_info.get('weights', [])
@@ -319,303 +257,239 @@ class RLDashboard:
                 ]
                 weights = [{'mean': 0.1} for _ in layers]
             
-            num_layers = len(layers)
-            max_nodes = max([l['out'] for l in layers] + [100])
+            lines = []
+            lines.append(f"{Colors.BOLD}{Colors.CYAN}Neural Network Architecture (Live Learning){Colors.RESET}")
+            lines.append("=" * min(80, self.terminal_width))
             
-            # Position layers horizontally
-            layer_x = np.linspace(0.1, 0.9, num_layers)
-            
-            # Draw layers and connections
-            prev_layer_nodes = None
-            node_radius = 0.015
+            # ASCII representation of layers
+            max_display_nodes = 15  # Max nodes to display per layer
+            layer_spacing = 12
             
             for layer_idx, layer in enumerate(layers):
                 num_nodes = layer['out']
-                display_nodes = min(num_nodes, 25)  # Max 25 nodes per layer for clarity
-                spacing = 0.8 / display_nodes if display_nodes > 1 else 0.4
-                
-                layer_nodes = []
+                display_nodes = min(num_nodes, max_display_nodes)
                 weight_info = weights[layer_idx] if layer_idx < len(weights) else {'mean': 0.1}
-                weight_intensity = min(1.0, weight_info['mean'] * 10)  # Scale for visualization
+                weight_intensity = min(1.0, weight_info['mean'] * 10)
                 
-                for node_idx in range(display_nodes):
-                    x = layer_x[layer_idx]
-                    y = 0.1 + (node_idx + 0.5) * spacing
-                    layer_nodes.append((x, y))
-                    
-                    # Node color based on weight (learning progress)
-                    # Green = learned, Yellow = learning, Red = needs learning
-                    if weight_intensity > 0.5:
-                        node_color = plt.cm.Greens(0.3 + weight_intensity * 0.5)
-                    elif weight_intensity > 0.2:
-                        node_color = plt.cm.YlOrRd(0.3 + weight_intensity * 0.7)
-                    else:
-                        node_color = 'lightgray'
-                    
-                    # Draw node with size based on weight
-                    node_size = node_radius * (1 + weight_intensity * 0.5)
-                    circle = Circle((x, y), node_size, color=node_color, zorder=3, edgecolor='black', linewidth=0.5)
-                    self.ax_nn.add_patch(circle)
+                # Choose color based on learning progress
+                if weight_intensity > 0.5:
+                    color = Colors.BRIGHT_GREEN
+                    symbol = '●'
+                elif weight_intensity > 0.2:
+                    color = Colors.BRIGHT_YELLOW
+                    symbol = '○'
+                else:
+                    color = Colors.GRAY
+                    symbol = '·'
                 
-                # Draw connections to previous layer
-                if prev_layer_nodes is not None:
-                    for prev_node in prev_layer_nodes:
-                        for curr_node in layer_nodes:
-                            # Connection opacity based on weight strength
-                            alpha = min(0.4, weight_intensity * 0.3 + 0.1)
-                            self.ax_nn.plot(
-                                [prev_node[0], curr_node[0]],
-                                [prev_node[1], curr_node[1]],
-                                'b-', alpha=alpha, linewidth=0.3, zorder=1
-                            )
+                # Layer header
+                lines.append(f"\n{Colors.BOLD}Layer {layer_idx+1}{Colors.RESET} ({num_nodes} nodes):")
                 
-                prev_layer_nodes = layer_nodes
+                # Display nodes
+                node_line = "  "
+                for i in range(display_nodes):
+                    node_line += f"{color}{symbol}{Colors.RESET} "
+                if num_nodes > max_display_nodes:
+                    node_line += f"{Colors.GRAY}... (+{num_nodes - max_display_nodes}){Colors.RESET}"
+                lines.append(node_line)
                 
-                # Label layer
-                layer_label = f"L{layer_idx+1}\n{num_nodes}n"
-                self.ax_nn.text(layer_x[layer_idx], 0.95, layer_label,
-                               ha='center', va='top', fontsize=8, fontweight='bold',
-                               bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7))
+                # Weight info
+                lines.append(f"  Weight: {weight_info.get('mean', 0):.4f} | "
+                           f"Learning: {'Active' if weight_intensity > 0.2 else 'Low'}")
             
-            # Add info box
-            info_text = (
-                f"Parameters: {self.nn_info.get('total_parameters', 0):,}\n"
-                f"Episodes: {self.stats['episode']}\n"
-                f"Steps: {self.stats['timesteps']:,}\n"
-                f"Trades: {self.stats['total_trades']}\n"
-            )
+            # Network info
+            lines.append(f"\n{Colors.BOLD}Network Info:{Colors.RESET}")
+            lines.append(f"  Parameters: {self.nn_info.get('total_parameters', 0):,}")
             if self.nn_info.get('learning_progress'):
-                recent_progress = np.mean(self.nn_info['learning_progress'][-10:]) if self.nn_info['learning_progress'] else 0
-                info_text += f"Learning: {recent_progress:.6f}"
+                recent = np.mean(self.nn_info['learning_progress'][-10:]) if self.nn_info['learning_progress'] else 0
+                lines.append(f"  Learning Progress: {recent:.6f}")
             
-            self.ax_nn.text(0.02, 0.02, info_text, transform=self.ax_nn.transAxes,
-                           fontsize=9, verticalalignment='bottom',
-                           bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
-            
-            self.ax_nn.set_xlim(-0.05, 1.05)
-            self.ax_nn.set_ylim(0, 1)
-            
+            return "\n".join(lines)
         except Exception as e:
-            self.ax_nn.text(0.5, 0.5, f"Error: {e}", ha='center', va='center', transform=self.ax_nn.transAxes)
+            return f"Error displaying NN: {e}"
     
-    def _draw_global_metrics(self):
-        """Draw global accuracy and performance metrics"""
-        if not HAS_MATPLOTLIB or self.ax_global is None:
-            return
+    def _format_metrics_text(self) -> str:
+        """Format global metrics as text"""
+        acc = self.stats['accuracy_global']
+        acc_color = Colors.BRIGHT_GREEN if acc >= 50 else Colors.BRIGHT_YELLOW if acc >= 40 else Colors.BRIGHT_RED
         
-        self.ax_global.clear()
-        self.ax_global.axis('off')
-        self.ax_global.set_title('Global Accuracy & Performance', fontsize=11, fontweight='bold', pad=10)
-        
-        metrics_text = (
-            f"Global Accuracy: {self.stats['accuracy_global']:.2f}%\n"
-            f"Win Rate: {self.stats['win_rate_global']:.2f}%\n"
-            f"Total Trades: {self.stats['total_trades']}\n"
-            f"Total P&L: ${self.stats['total_pnl']:,.2f}\n"
-            f"Avg Reward: {self.stats['avg_reward']:.4f}\n"
-            f"Best Episode: {self.stats['best_episode_reward']:.2f}\n"
-            f"Learning Rate: {self.stats['learning_rate']:.6f}\n"
-            f"Timesteps: {self.stats['timesteps']:,}"
-        )
-        
-        # Color code accuracy
-        acc_color = 'green' if self.stats['accuracy_global'] >= 50 else 'orange' if self.stats['accuracy_global'] >= 40 else 'red'
-        
-        self.ax_global.text(0.1, 0.9, metrics_text, transform=self.ax_global.transAxes,
-                           fontsize=10, verticalalignment='top', family='monospace',
-                           bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
-        
-        # Highlight accuracy
-        self.ax_global.text(0.1, 0.9, f"Global Accuracy: {self.stats['accuracy_global']:.2f}%",
-                           transform=self.ax_global.transAxes, fontsize=11, fontweight='bold',
-                           color=acc_color, verticalalignment='top')
+        lines = []
+        lines.append(f"{Colors.BOLD}{Colors.CYAN}Global Accuracy & Performance{Colors.RESET}")
+        lines.append("=" * min(50, self.terminal_width))
+        lines.append(f"{acc_color}Global Accuracy: {acc:.2f}%{Colors.RESET}")
+        lines.append(f"Win Rate: {self.stats['win_rate_global']:.2f}%")
+        lines.append(f"Total Trades: {self.stats['total_trades']}")
+        lines.append(f"Total P&L: ${self.stats['total_pnl']:,.2f}")
+        lines.append(f"Avg Reward: {self.stats['avg_reward']:.4f}")
+        lines.append(f"Best Episode: {self.stats['best_episode_reward']:.2f}")
+        lines.append(f"Learning Rate: {self.stats['learning_rate']:.6f}")
+        lines.append(f"Timesteps: {self.stats['timesteps']:,}")
+        return "\n".join(lines)
     
-    def _draw_per_pair_metrics(self):
-        """Draw per-pair performance metrics"""
-        if not HAS_MATPLOTLIB or self.ax_pairs is None:
-            return
+    def _format_per_pair_text(self) -> str:
+        """Format per-pair metrics as text"""
+        lines = []
+        lines.append(f"{Colors.BOLD}{Colors.CYAN}Per-Pair Performance{Colors.RESET}")
+        lines.append("=" * min(50, self.terminal_width))
         
-        self.ax_pairs.clear()
-        self.ax_pairs.axis('off')
-        self.ax_pairs.set_title('Per-Pair Performance', fontsize=11, fontweight='bold', pad=10)
-        
-        pairs_text = "Pair Performance:\n\n"
         pairs = sorted(self.stats['accuracy_by_pair'].items(), 
-                      key=lambda x: x[1], reverse=True)[:8]  # Top 8 pairs
+                      key=lambda x: x[1], reverse=True)[:8]
         
         if not pairs:
-            pairs_text += "No trades yet..."
+            lines.append("No trades yet...")
         else:
             for symbol, accuracy in pairs:
                 win_rate = self.stats['win_rate_by_pair'].get(symbol, 0.0)
                 pnl = self.stats['pnl_by_pair'].get(symbol, 0.0)
-                pnl_color = 'green' if pnl >= 0 else 'red'
+                pnl_color = Colors.BRIGHT_GREEN if pnl >= 0 else Colors.BRIGHT_RED
                 
-                pairs_text += f"{symbol}:\n"
-                pairs_text += f"  Acc: {accuracy:.1f}% | "
-                pairs_text += f"WR: {win_rate:.1f}% | "
-                pairs_text += f"P&L: ${pnl:,.0f}\n"
+                lines.append(f"{symbol}:")
+                lines.append(f"  Acc: {accuracy:.1f}% | WR: {win_rate:.1f}% | "
+                           f"{pnl_color}P&L: ${pnl:,.0f}{Colors.RESET}")
         
-        self.ax_pairs.text(0.05, 0.95, pairs_text, transform=self.ax_pairs.transAxes,
-                          fontsize=9, verticalalignment='top', family='monospace',
-                          bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+        return "\n".join(lines)
     
-    def _draw_reward_plot(self):
-        """Draw episode rewards plot"""
-        if not HAS_MATPLOTLIB or self.ax_reward is None:
-            return
+    def _format_reward_chart(self) -> str:
+        """Format reward chart as ASCII"""
+        if not self.stats['episode_rewards']:
+            return "No reward data yet"
         
-        self.ax_reward.clear()
-        if self.stats['episode_rewards']:
-            episodes = range(len(self.stats['episode_rewards']))
-            self.ax_reward.plot(episodes, self.stats['episode_rewards'], 'b-', linewidth=1.5, label='Reward')
+        lines = []
+        lines.append(f"{Colors.BOLD}Episode Rewards{Colors.RESET}")
+        lines.append("=" * min(50, self.terminal_width))
+        
+        rewards = self.stats['episode_rewards'][-30:]  # Last 30 episodes
+        if rewards:
+            max_reward = max(rewards) if max(rewards) > 0 else 1
+            min_reward = min(rewards)
+            chart_width = 40
             
-            # Moving average
-            if len(self.stats['episode_rewards']) > 10:
-                window = min(20, len(self.stats['episode_rewards']) // 2)
-                ma = np.convolve(self.stats['episode_rewards'], 
-                               np.ones(window)/window, mode='valid')
-                self.ax_reward.plot(range(window-1, len(self.stats['episode_rewards'])), 
-                                   ma, 'r--', linewidth=2, label='MA')
-            
-            self.ax_reward.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
-            self.ax_reward.legend()
+            for i, reward in enumerate(rewards[-10:]):  # Show last 10
+                bar_length = int((reward - min_reward) / (max_reward - min_reward) * chart_width) if max_reward != min_reward else 0
+                bar = "█" * bar_length
+                color = Colors.BRIGHT_GREEN if reward > 0 else Colors.BRIGHT_RED
+                lines.append(f"Ep {len(rewards)-10+i:3d}: {color}{bar}{Colors.RESET} {reward:.2f}")
         
-        self.ax_reward.set_title(f'Episode Rewards (Ep: {self.stats["episode"]})', fontsize=10)
-        self.ax_reward.set_xlabel('Episode')
-        self.ax_reward.set_ylabel('Reward')
-        self.ax_reward.grid(True, alpha=0.3)
+        return "\n".join(lines)
     
-    def _draw_loss_plot(self):
-        """Draw training loss plot"""
-        if not HAS_MATPLOTLIB or self.ax_loss is None:
-            return
-        
-        self.ax_loss.clear()
-        if self.stats['losses']:
-            self.ax_loss.plot(self.stats['losses'], 'r-', linewidth=1.5)
-            self.ax_loss.set_title('Training Loss', fontsize=10)
-        else:
-            self.ax_loss.text(0.5, 0.5, 'No loss data yet', ha='center', va='center',
-                            transform=self.ax_loss.transAxes)
-        
-        self.ax_loss.set_xlabel('Update')
-        self.ax_loss.set_ylabel('Loss')
-        self.ax_loss.grid(True, alpha=0.3)
-    
-    def _draw_accuracy_plot(self):
-        """Draw accuracy over time"""
-        if not HAS_MATPLOTLIB or self.ax_accuracy is None:
-            return
-        
-        self.ax_accuracy.clear()
-        
-        # Track accuracy history
+    def _format_accuracy_chart(self) -> str:
+        """Format accuracy chart as ASCII"""
         if not hasattr(self, '_accuracy_history'):
             self._accuracy_history = []
         
         self._accuracy_history.append(self.stats['accuracy_global'])
-        if len(self._accuracy_history) > 200:
-            self._accuracy_history = self._accuracy_history[-200:]
+        if len(self._accuracy_history) > 50:
+            self._accuracy_history = self._accuracy_history[-50:]
+        
+        lines = []
+        lines.append(f"{Colors.BOLD}Accuracy Over Time{Colors.RESET}")
+        lines.append("=" * min(50, self.terminal_width))
         
         if len(self._accuracy_history) > 1:
-            self.ax_accuracy.plot(self._accuracy_history, 'g-', linewidth=2, label='Global Accuracy')
-            self.ax_accuracy.axhline(y=50, color='orange', linestyle='--', alpha=0.5, label='50%')
-            self.ax_accuracy.legend()
+            chart_width = 40
+            for i, acc in enumerate(self._accuracy_history[-10:]):  # Last 10
+                bar_length = int(acc / 100 * chart_width)
+                bar = "█" * bar_length
+                color = Colors.BRIGHT_GREEN if acc >= 50 else Colors.BRIGHT_YELLOW if acc >= 40 else Colors.BRIGHT_RED
+                lines.append(f"Ep {len(self._accuracy_history)-10+i:3d}: {color}{bar}{Colors.RESET} {acc:.1f}%")
         
-        self.ax_accuracy.set_title('Accuracy Over Time', fontsize=10)
-        self.ax_accuracy.set_xlabel('Episode')
-        self.ax_accuracy.set_ylabel('Accuracy %')
-        self.ax_accuracy.set_ylim(0, 100)
-        self.ax_accuracy.grid(True, alpha=0.3)
+        return "\n".join(lines)
     
-    def _draw_training_stats(self):
-        """Draw training statistics"""
-        if not HAS_MATPLOTLIB or self.ax_stats is None:
-            return
-        
-        self.ax_stats.clear()
-        self.ax_stats.axis('off')
-        self.ax_stats.set_title('Training Statistics', fontsize=10, fontweight='bold', pad=10)
-        
-        stats_text = (
-            f"Episode: {self.stats['episode']}\n"
-            f"Timesteps: {self.stats['timesteps']:,}\n"
-            f"Total Trades: {self.stats['total_trades']}\n"
-            f"Avg Reward: {self.stats['avg_reward']:.4f}\n"
-            f"Learning Rate: {self.stats['learning_rate']:.6f}\n"
-            f"Best Reward: {self.stats['best_episode_reward']:.2f}\n"
-            f"Last Update: {datetime.now().strftime('%H:%M:%S')}"
-        )
-        
-        self.ax_stats.text(0.1, 0.9, stats_text, transform=self.ax_stats.transAxes,
-                          fontsize=9, verticalalignment='top', family='monospace',
-                          bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.8))
+    def _format_training_stats_text(self) -> str:
+        """Format training statistics as text"""
+        lines = []
+        lines.append(f"{Colors.BOLD}{Colors.CYAN}Training Statistics{Colors.RESET}")
+        lines.append("=" * min(50, self.terminal_width))
+        lines.append(f"Episode: {self.stats['episode']}")
+        lines.append(f"Timesteps: {self.stats['timesteps']:,}")
+        lines.append(f"Total Trades: {self.stats['total_trades']}")
+        lines.append(f"Avg Reward: {self.stats['avg_reward']:.4f}")
+        lines.append(f"Learning Rate: {self.stats['learning_rate']:.6f}")
+        lines.append(f"Best Reward: {self.stats['best_episode_reward']:.2f}")
+        lines.append(f"Last Update: {datetime.now().strftime('%H:%M:%S')}")
+        return "\n".join(lines)
     
-    def _draw_pnl_plot(self):
-        """Draw cumulative P&L plot"""
-        if not HAS_MATPLOTLIB or self.ax_pnl is None:
-            return
-        
-        self.ax_pnl.clear()
-        
-        # Track PnL history
+    def _format_pnl_chart(self) -> str:
+        """Format P&L chart as ASCII"""
         if not hasattr(self, '_pnl_history'):
             self._pnl_history = []
         
         self._pnl_history.append(self.stats['total_pnl'])
-        if len(self._pnl_history) > 200:
-            self._pnl_history = self._pnl_history[-200:]
+        if len(self._pnl_history) > 50:
+            self._pnl_history = self._pnl_history[-50:]
+        
+        lines = []
+        lines.append(f"{Colors.BOLD}Cumulative P&L{Colors.RESET}")
+        lines.append("=" * min(50, self.terminal_width))
         
         if len(self._pnl_history) > 1:
-            color = 'green' if self._pnl_history[-1] >= 0 else 'red'
-            self.ax_pnl.plot(self._pnl_history, color=color, linewidth=2, label='Cumulative P&L')
-            self.ax_pnl.fill_between(range(len(self._pnl_history)), 0, self._pnl_history,
-                                    alpha=0.3, color=color)
-            self.ax_pnl.legend()
+            max_pnl = max(abs(p) for p in self._pnl_history) if self._pnl_history else 1
+            chart_width = 40
+            
+            for i, pnl in enumerate(self._pnl_history[-10:]):  # Last 10
+                bar_length = int(abs(pnl) / max_pnl * chart_width) if max_pnl > 0 else 0
+                bar = "█" * bar_length
+                color = Colors.BRIGHT_GREEN if pnl >= 0 else Colors.BRIGHT_RED
+                lines.append(f"Ep {len(self._pnl_history)-10+i:3d}: {color}{bar}{Colors.RESET} ${pnl:,.0f}")
         
-        self.ax_pnl.set_title('Cumulative P&L', fontsize=10)
-        self.ax_pnl.set_xlabel('Episode')
-        self.ax_pnl.set_ylabel('P&L ($)')
-        self.ax_pnl.axhline(y=0, color='r', linestyle='--', alpha=0.5)
-        self.ax_pnl.grid(True, alpha=0.3)
+        return "\n".join(lines)
     
     def _update_all(self):
-        """Update all dashboard elements"""
-        if HAS_MATPLOTLIB and self.fig is not None:
-            try:
-                self._draw_neural_network()
-                self._draw_global_metrics()
-                self._draw_per_pair_metrics()
-                self._draw_reward_plot()
-                self._draw_loss_plot()
-                self._draw_accuracy_plot()
-                self._draw_training_stats()
-                self._draw_pnl_plot()
-                
-                # Refresh
-                self.fig.canvas.draw()
-                self.fig.canvas.flush_events()
-            except Exception as e:
-                print(f"Error updating dashboard: {e}")
-        else:
-            self._print_text_stats()
+        """Update all dashboard elements - terminal only"""
+        self._print_text_stats()
     
     def _print_text_stats(self):
-        """Print statistics as text (fallback)"""
+        """Print comprehensive statistics in terminal"""
+        # Clear screen
         os.system('cls' if os.name == 'nt' else 'clear')
-        print("=" * 100)
-        print("RL TRAINING DASHBOARD")
-        print("=" * 100)
-        print(f"\nGlobal Accuracy: {self.stats['accuracy_global']:.2f}%")
-        print(f"Win Rate: {self.stats['win_rate_global']:.2f}%")
-        print(f"Total Trades: {self.stats['total_trades']}")
-        print(f"Episode: {self.stats['episode']}")
-        print(f"Timesteps: {self.stats['timesteps']:,}")
-        print(f"\nPer-Pair Performance:")
-        for symbol, acc in sorted(self.stats['accuracy_by_pair'].items(), key=lambda x: x[1], reverse=True):
-            print(f"  {symbol}: {acc:.1f}%")
-        print("=" * 100)
+        
+        # Header
+        width = min(self.terminal_width, 120)
+        print(f"\n{Colors.BOLD}{Colors.CYAN}{'='*width}{Colors.RESET}")
+        print(f"{Colors.BOLD}{Colors.CYAN}RL TRAINING DASHBOARD - Live Monitoring{Colors.RESET}")
+        print(f"{Colors.BOLD}{Colors.CYAN}{'='*width}{Colors.RESET}\n")
+        
+        # Two column layout
+        left_col = []
+        right_col = []
+        
+        # Left column: NN and Global metrics
+        left_col.append(self._draw_neural_network_ascii())
+        left_col.append("")
+        left_col.append(self._format_metrics_text())
+        left_col.append("")
+        left_col.append(self._format_training_stats_text())
+        
+        # Right column: Per-pair, charts
+        right_col.append(self._format_per_pair_text())
+        right_col.append("")
+        right_col.append(self._format_reward_chart())
+        right_col.append("")
+        right_col.append(self._format_accuracy_chart())
+        right_col.append("")
+        right_col.append(self._format_pnl_chart())
+        
+        # Print side by side if terminal is wide enough, otherwise stacked
+        if width >= 120:
+            left_lines = "\n".join(left_col).split('\n')
+            right_lines = "\n".join(right_col).split('\n')
+            max_lines = max(len(left_lines), len(right_lines))
+            
+            for i in range(max_lines):
+                left = left_lines[i] if i < len(left_lines) else ""
+                right = right_lines[i] if i < len(right_lines) else ""
+                # Pad to create columns
+                left_padded = left.ljust(60)
+                right_padded = right[:60] if len(right) > 60 else right
+                print(f"{left_padded}  {right_padded}")
+        else:
+            # Stacked layout for narrow terminals
+            print("\n".join(left_col))
+            print("\n")
+            print("\n".join(right_col))
+        
+        print(f"\n{Colors.BOLD}{Colors.CYAN}{'='*width}{Colors.RESET}")
+        print(f"{Colors.GRAY}Press Ctrl+C to stop{Colors.RESET}\n")
     
     def _update_loop(self):
         """Main update loop"""
@@ -640,8 +514,6 @@ class RLDashboard:
     def stop(self):
         """Stop dashboard"""
         self.running = False
-        if HAS_MATPLOTLIB and self.fig is not None:
-            plt.close(self.fig)
     
     def update_model(self, model):
         """Update model reference"""

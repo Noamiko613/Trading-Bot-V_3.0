@@ -48,16 +48,8 @@ except (ImportError, OSError, RuntimeError) as e:
         print(f"Warning: torch not available ({type(e).__name__}: {e})")
         print("RL training will work but NN visualization may be limited.")
 
-try:
-    import matplotlib.pyplot as plt
-    import matplotlib.patches as mpatches
-    from matplotlib.animation import FuncAnimation
-    import matplotlib
-    matplotlib.use('TkAgg' if os.name != 'nt' else 'TkAgg')  # Use TkAgg for live updates
-    HAS_MATPLOTLIB = True
-except ImportError:
-    HAS_MATPLOTLIB = False
-    print("Warning: matplotlib not available. NN visualization will be text-only.")
+# No matplotlib - terminal only
+HAS_MATPLOTLIB = False
 
 
 class RLProgressMonitor:
@@ -101,13 +93,6 @@ class RLProgressMonitor:
         
         # Extract NN architecture
         self._extract_architecture()
-        
-        # Setup visualization if matplotlib available
-        if HAS_MATPLOTLIB:
-            self._setup_visualization()
-        else:
-            self.fig = None
-            self.ax = None
     
     def _extract_architecture(self):
         """Extract neural network architecture from model"""
@@ -173,146 +158,7 @@ class RLProgressMonitor:
                 'total_parameters': 0
             }
     
-    def _setup_visualization(self):
-        """Setup matplotlib figure for visualization"""
-        if not HAS_MATPLOTLIB:
-            return
-        
-        self.fig = plt.figure(figsize=(16, 10))
-        self.fig.suptitle('RL Training Progress Monitor', fontsize=16, fontweight='bold')
-        
-        # Create subplots: NN visualization (left) and metrics (right)
-        gs = self.fig.add_gridspec(2, 2, hspace=0.3, wspace=0.3)
-        
-        # NN Architecture visualization (left side, takes 2 rows)
-        self.ax_nn = self.fig.add_subplot(gs[:, 0])
-        self.ax_nn.set_title('Neural Network Architecture', fontsize=12, fontweight='bold')
-        self.ax_nn.axis('off')
-        
-        # Metrics plots (right side)
-        self.ax_reward = self.fig.add_subplot(gs[0, 1])
-        self.ax_reward.set_title('Episode Rewards', fontsize=10)
-        self.ax_reward.set_xlabel('Episode')
-        self.ax_reward.set_ylabel('Reward')
-        
-        self.ax_loss = self.fig.add_subplot(gs[1, 1])
-        self.ax_loss.set_title('Training Loss', fontsize=10)
-        self.ax_loss.set_xlabel('Update')
-        self.ax_loss.set_ylabel('Loss')
-        
-        plt.ion()  # Interactive mode
-        plt.show(block=False)
-    
-    def _draw_neural_network(self):
-        """Draw neural network architecture"""
-        if not HAS_MATPLOTLIB or self.ax_nn is None:
-            return
-        
-        self.ax_nn.clear()
-        self.ax_nn.axis('off')
-        self.ax_nn.set_title('Neural Network Architecture (Live)', fontsize=12, fontweight='bold')
-        
-        try:
-            # Get layer sizes
-            layers = self.nn_architecture.get('layer_sizes', [])
-            if not layers:
-                # Default structure
-                layers = [
-                    {'in_features': 100, 'out_features': 512},
-                    {'in_features': 512, 'out_features': 512},
-                    {'in_features': 512, 'out_features': 256},
-                    {'in_features': 256, 'out_features': 128},
-                    {'in_features': 128, 'out_features': 3}
-                ]
-            
-            # Add input layer if not present
-            if not any('in_features' in str(l) and l.get('in_features', 0) > 100 for l in layers):
-                layers.insert(0, {'in_features': 0, 'out_features': layers[0]['in_features'] if layers else 100})
-            
-            # Draw network
-            num_layers = len(layers)
-            max_nodes = max([l.get('out_features', l.get('in_features', 100)) for l in layers] + [100])
-            
-            # Position layers
-            layer_positions = np.linspace(0.1, 0.9, num_layers)
-            node_radius = 0.015
-            
-            # Get live weights if available
-            live_weights = self._get_layer_weights()
-            
-            # Draw layers and connections
-            prev_nodes = None
-            node_positions_by_layer = []
-            
-            for layer_idx, layer in enumerate(layers):
-                num_nodes = layer.get('out_features', layer.get('in_features', 100))
-                
-                # Scale node count for visualization (max 20 nodes per layer)
-                display_nodes = min(num_nodes, 20)
-                spacing = 0.8 / display_nodes if display_nodes > 1 else 0
-                
-                nodes = []
-                for node_idx in range(display_nodes):
-                    x = layer_positions[layer_idx]
-                    y = 0.1 + (node_idx + 0.5) * spacing
-                    nodes.append((x, y))
-                    
-                    # Draw node
-                    circle = plt.Circle((x, y), node_radius, 
-                                       color=self._get_node_color(layer_idx, node_idx, live_weights),
-                                       zorder=3)
-                    self.ax_nn.add_patch(circle)
-                
-                node_positions_by_layer.append(nodes)
-                
-                # Draw connections to previous layer
-                if prev_nodes is not None:
-                    for prev_node in prev_nodes:
-                        for curr_node in nodes:
-                            # Get weight strength for coloring
-                            weight_alpha = 0.3  # Default
-                            if live_weights and layer_idx < len(live_weights):
-                                weight_alpha = min(0.7, abs(live_weights[layer_idx]) * 0.5 + 0.2)
-                            
-                            self.ax_nn.plot(
-                                [prev_node[0], curr_node[0]],
-                                [prev_node[1], curr_node[1]],
-                                'b-', alpha=weight_alpha, linewidth=0.5, zorder=1
-                            )
-                
-                prev_nodes = nodes
-                
-                # Label layer
-                layer_name = f"Layer {layer_idx + 1}\n({num_nodes} nodes)"
-                self.ax_nn.text(layer_positions[layer_idx], 0.95, layer_name,
-                               ha='center', va='top', fontsize=8, fontweight='bold',
-                               bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-            
-            # Add info text
-            info_text = (
-                f"Total Parameters: {self.nn_architecture.get('total_parameters', 0):,}\n"
-                f"Episodes: {self.stats['episode']}\n"
-                f"Timesteps: {self.stats['timesteps']:,}\n"
-                f"Total Trades: {self.stats['total_trades']}"
-            )
-            self.ax_nn.text(0.02, 0.02, info_text, transform=self.ax_nn.transAxes,
-                           fontsize=9, verticalalignment='bottom',
-                           bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.7))
-            
-            self.ax_nn.set_xlim(-0.1, 1.1)
-            self.ax_nn.set_ylim(-0.1, 1.1)
-            
-        except Exception as e:
-            print(f"Error drawing NN: {e}")
-    
-    def _get_node_color(self, layer_idx: int, node_idx: int, live_weights: Optional[List]) -> str:
-        """Get color for node based on activation/weight"""
-        if live_weights and layer_idx < len(live_weights):
-            weight = abs(live_weights[layer_idx])
-            # Color intensity based on weight
-            intensity = min(1.0, weight * 2)
-            return plt.cm.RdYlGn(0.3 + intensity * 0.4)  # Green to yellow to red
-        return 'lightblue'
+    # All matplotlib visualization removed - using terminal-only dashboard
     
     def _get_layer_weights(self) -> Optional[List]:
         """Get current layer weights for visualization"""
@@ -347,33 +193,7 @@ class RLProgressMonitor:
         except Exception as e:
             return None
     
-    def _update_metrics_plots(self):
-        """Update metrics plots"""
-        if not HAS_MATPLOTLIB:
-            return
-        
-        try:
-            # Rewards plot
-            self.ax_reward.clear()
-            if self.stats['rewards']:
-                self.ax_reward.plot(self.stats['rewards'], 'b-', linewidth=1)
-                self.ax_reward.axhline(y=0, color='r', linestyle='--', alpha=0.5)
-                self.ax_reward.set_title(f'Episode Rewards (Avg: {np.mean(self.stats["rewards"][-100:]):.2f})', fontsize=10)
-                self.ax_reward.set_xlabel('Episode')
-                self.ax_reward.set_ylabel('Reward')
-                self.ax_reward.grid(True, alpha=0.3)
-            
-            # Loss plot
-            self.ax_loss.clear()
-            if self.stats['losses']:
-                self.ax_loss.plot(self.stats['losses'], 'r-', linewidth=1)
-                self.ax_loss.set_title('Training Loss', fontsize=10)
-                self.ax_loss.set_xlabel('Update')
-                self.ax_loss.set_ylabel('Loss')
-                self.ax_loss.grid(True, alpha=0.3)
-            
-        except Exception as e:
-            print(f"Error updating plots: {e}")
+    # Metrics plots removed - handled by dashboard
     
     def update_stats(self, new_stats: Dict):
         """Update statistics"""
@@ -381,24 +201,8 @@ class RLProgressMonitor:
             self.stats.update(new_stats)
     
     def _update_display(self):
-        """Update display with current stats"""
-        if HAS_MATPLOTLIB and self.fig is not None:
-            try:
-                # Draw neural network
-                self._draw_neural_network()
-                
-                # Update metrics
-                self._update_metrics_plots()
-                
-                # Refresh display
-                self.fig.canvas.draw()
-                self.fig.canvas.flush_events()
-                
-            except Exception as e:
-                print(f"Error updating display: {e}")
-        else:
-            # Text-only mode
-            self._print_text_stats()
+        """Update display with current stats - terminal only"""
+        self._print_text_stats()
     
     def _print_text_stats(self):
         """Print statistics as text"""
@@ -456,6 +260,4 @@ class RLProgressMonitor:
     def stop(self):
         """Stop monitoring"""
         self.running = False
-        if HAS_MATPLOTLIB and self.fig is not None:
-            plt.close(self.fig)
 
