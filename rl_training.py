@@ -57,6 +57,26 @@ from rl_dashboard import RLDashboard
 from utils.analytics import PerformanceAnalytics
 
 
+RL_TRAINING_SYMBOLS = [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "BNBUSDT",
+    "XRPUSDT",
+]
+
+RL_TRAINING_TIMEFRAMES = [
+    "1m",
+    "5m",
+    "15m",
+    "1h",
+    "4h",
+    "6h",
+    "12h",
+    "1d",
+]
+
+
 class TrainingState:
     """Manages training state for pause/resume"""
     
@@ -493,7 +513,8 @@ class RLTrainer:
 
                 # Check global accuracy (win rate) from trades database
                 try:
-                    trades = self.analytics.get_closed_trades(symbol=self.symbol, days=None)
+                    # Global accuracy: use all closed trades across all symbols
+                    trades = self.analytics.get_closed_trades(symbol=None, days=None)
                     if trades:
                         metrics = self.analytics.calculate_metrics(trades)
                         win_rate = metrics.get("win_rate", 0.0)
@@ -569,7 +590,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description="Train RL trading agent")
-    parser.add_argument("--symbol", type=str, default="BTCUSDT", help="Trading symbol")
+    parser.add_argument("--symbol", type=str, default=None, help="Trading symbol (default: all RL training symbols)")
     parser.add_argument("--balance", type=float, default=100000.0, help="Starting balance")
     parser.add_argument("--timesteps", type=int, default=1000000, help="Total training timesteps")
     parser.add_argument("--max-trades", type=int, default=None, help="Max trades per episode (None=unlimited)")
@@ -582,23 +603,31 @@ def main():
                         help="Minimum number of closed trades required before applying accuracy threshold (default: 50)")
     
     args = parser.parse_args()
-    
-    # Create trainer
-    trainer = RLTrainer(
-        symbol=args.symbol,
-        starting_balance=args.balance,
-        max_trades=args.max_trades,  # None = unlimited
-        model_dir=args.model_dir
-    )
-    
-    # Train
-    trainer.train(
-        total_timesteps=args.timesteps,
-        use_monitor=args.monitor,
-        use_dashboard=args.dashboard,
-        accuracy_threshold=args.accuracy_threshold,
-        min_trades_for_threshold=args.min_trades,
-    )
+
+    symbols = RL_TRAINING_SYMBOLS if not args.symbol else [args.symbol]
+
+    print("\n[RL] =====================================================")
+    print("[RL] RL TRAINING MODE - PAPER SIMULATION ONLY (NO REAL MONEY)")
+    print("[RL] Training symbols: " + ", ".join(symbols))
+    print("[RL] Logical training timeframes: " + ", ".join(RL_TRAINING_TIMEFRAMES))
+    print("[RL] =====================================================\n")
+
+    for sym in symbols:
+        print(f"\n[RL] === Starting training for symbol {sym} ===")
+        trainer = RLTrainer(
+            symbol=sym,
+            starting_balance=args.balance,
+            max_trades=args.max_trades,  # None = unlimited
+            model_dir=args.model_dir
+        )
+
+        trainer.train(
+            total_timesteps=args.timesteps,
+            use_monitor=args.monitor,
+            use_dashboard=args.dashboard,
+            accuracy_threshold=args.accuracy_threshold,
+            min_trades_for_threshold=args.min_trades,
+        )
 
 
 if __name__ == "__main__":
