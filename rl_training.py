@@ -54,6 +54,7 @@ except ImportError as e:
 from rl_trading_env import TradingEnv
 from rl_progress_monitor import RLProgressMonitor
 from rl_dashboard import RLDashboard
+from utils.analytics import PerformanceAnalytics
 
 
 class TrainingState:
@@ -225,6 +226,9 @@ class RLTrainer:
         # Environment
         self.env = None
         self.model = None
+
+        # Analytics for global accuracy (win rate)
+        self.analytics = PerformanceAnalytics()
         
         # Setup signal handlers for pause/resume
         self._setup_signal_handlers()
@@ -365,7 +369,14 @@ class RLTrainer:
             self.dashboard.start()
             print("[RL] Dashboard started")
     
-    def train(self, total_timesteps: int = 1000000):
+    def train(
+        self,
+        total_timesteps: int = 1000000,
+        use_monitor: bool = False,
+        use_dashboard: bool = False,
+        accuracy_threshold: float = 99.0,
+        min_trades_for_threshold: int = 50,
+    ):
         """Train the RL agent"""
         # Create environment
         self.create_environment()
@@ -373,11 +384,17 @@ class RLTrainer:
         # Create or load model
         self.create_model(load_checkpoint=True)
         
-        # Start progress monitor
-        self.start_progress_monitor()
+        # Note: Progress monitor and dashboard are now optional so that
+        # rl_training.py can run with simple, non-glitchy terminal output
+        # by default. They can be enabled via CLI flags.
+
+        # Start optional progress monitor
+        if use_monitor:
+            self.start_progress_monitor()
         
-        # Start comprehensive dashboard
-        self.start_dashboard()
+        # Start optional comprehensive dashboard
+        if use_dashboard:
+            self.start_dashboard()
         
         # Load state
         state = self.state_manager.get_state()
@@ -473,6 +490,29 @@ class RLTrainer:
                 
                 print(f"\n[RL] Progress: {current_timesteps}/{total_timesteps} timesteps "
                       f"({current_timesteps/total_timesteps*100:.1f}%) - Trades: {total_trades}")
+
+                # Check global accuracy (win rate) from trades database
+                try:
+                    trades = self.analytics.get_closed_trades(symbol=self.symbol, days=None)
+                    if trades:
+                        metrics = self.analytics.calculate_metrics(trades)
+                        win_rate = metrics.get("win_rate", 0.0)
+                        total_trades_global = metrics.get("total_trades", 0)
+                        print(f"[RL] Global win rate: {win_rate:.2f}% over {total_trades_global} trades")
+
+                        # If we have enough trades and win rate exceeds threshold, save model and run paper test
+                        if total_trades_global >= min_trades_for_threshold and win_rate >= accuracy_threshold:
+                            best_model_path = self.model_dir / f"best_model_{win_rate:.2f}_acc.zip"
+                            self.model.save(str(best_model_path))
+                            print(f"[RL] Accuracy threshold reached ({win_rate:.2f}%). "
+                                  f"Best model saved to {best_model_path}")
+
+                            # Run paper-testing mode with the best model
+                            self._run_paper_test(str(best_model_path))
+                            print("[RL] Paper testing completed after reaching accuracy threshold. Stopping training loop.")
+                            return
+                except Exception as e:
+                    print(f"[RL] Error while evaluating global accuracy: {e}")
         
         except KeyboardInterrupt:
             print("\n[RL] Training interrupted. Saving final checkpoint...")
@@ -481,6 +521,40 @@ class RLTrainer:
             print(f"[RL] Final model saved to {final_path}")
         
         print("\n[RL] Training completed!")
+
+    def _run_paper_test(self, model_path: str, test_episodes: int = 5):
+        """Run paper-testing mode using a saved PPO model.
+
+        This uses the trading environment in inference mode only (no further learning)
+        and allows the TradeSimulator/analytics stack to record paper trades.
+        """
+        try:
+            print(f"[RL] Starting paper-testing run with model: {model_path}")
+
+            # Create a fresh environment for testing
+            self.create_environment()
+
+            # Load model for inference
+            test_model = PPO.load(model_path, env=self.env, device="auto")
+
+            episodes_run = 0
+            while episodes_run < test_episodes:
+                obs = self.env.reset()
+                done = False
+
+                while not done:
+                    action, _ = test_model.predict(obs, deterministic=True)
+                    obs, rewards, dones, infos = self.env.step(action)
+
+                    # DummyVecEnv returns arrays; consider episode done when first env is done
+                    done = bool(dones[0]) if isinstance(dones, (list, tuple, np.ndarray)) else bool(dones)
+
+                episodes_run += 1
+                print(f"[RL] Paper test episode {episodes_run}/{test_episodes} completed")
+
+            print("[RL] Paper-testing run completed")
+        except Exception as e:
+            print(f"[RL] Error during paper-testing run: {e}")
     
     def save_model(self, path: Optional[str] = None):
         """Save the trained model"""
@@ -500,6 +574,12 @@ def main():
     parser.add_argument("--timesteps", type=int, default=1000000, help="Total training timesteps")
     parser.add_argument("--max-trades", type=int, default=None, help="Max trades per episode (None=unlimited)")
     parser.add_argument("--model-dir", type=str, default="models/rl_models", help="Model directory")
+    parser.add_argument("--monitor", action="store_true", help="Enable simple progress monitor")
+    parser.add_argument("--dashboard", action="store_true", help="Enable full RL dashboard")
+    parser.add_argument("--accuracy-threshold", type=float, default=99.0,
+                        help="Global win rate threshold (in percent) to trigger paper-testing mode (default: 99.0)")
+    parser.add_argument("--min-trades", type=int, default=50,
+                        help="Minimum number of closed trades required before applying accuracy threshold (default: 50)")
     
     args = parser.parse_args()
     
@@ -512,7 +592,13 @@ def main():
     )
     
     # Train
-    trainer.train(total_timesteps=args.timesteps)
+    trainer.train(
+        total_timesteps=args.timesteps,
+        use_monitor=args.monitor,
+        use_dashboard=args.dashboard,
+        accuracy_threshold=args.accuracy_threshold,
+        min_trades_for_threshold=args.min_trades,
+    )
 
 
 if __name__ == "__main__":
