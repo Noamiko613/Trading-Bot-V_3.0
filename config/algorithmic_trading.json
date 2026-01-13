@@ -1,0 +1,23 @@
+{
+  "pairs": [
+    "BTCUSDT",
+    "ETHUSDT"
+  ],
+  "mode": "spot",
+  "starting_balance_per_pair": 10000.0,
+  "discovery_interval_seconds": 3600,
+  "signal_check_interval_seconds": 60,
+  "min_trades_for_validation": 100,
+  "target_win_rate": 66.0,
+  "target_rr": 2.0,
+  "risk_per_trade_pct": 0.01,
+  "algorithm_cooldown_seconds": 300,
+  "min_rr_for_trade": 2.0,
+  "probation": {
+    "min_trades": 50,
+    "min_win_rate": 60.0,
+    "min_rr": 1.8,
+    "description": "Algorithms must prove themselves in live trading before full activation"
+  }
+}
+

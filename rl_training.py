@@ -17,6 +17,14 @@ import threading
 from datetime import datetime
 from typing import Dict, Optional
 from pathlib import Path
+from collections import deque
+
+# Force UTF-8 output to avoid Windows codepage errors when printing symbols/emojis
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 # Add script directory to path for imports
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -24,6 +32,8 @@ if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
 
 import numpy as np
+import pandas as pd
+pd.set_option('future.no_silent_downcasting', True)
 
 # Try to import torch - handle DLL errors on Windows
 try:
@@ -42,7 +52,7 @@ except (ImportError, OSError, RuntimeError) as e:
 try:
     from stable_baselines3 import PPO
     from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
-    from stable_baselines3.common.vec_env import DummyVecEnv
+    from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize
     from stable_baselines3.common.monitor import Monitor
     HAS_SB3 = True
 except ImportError as e:
@@ -51,9 +61,21 @@ except ImportError as e:
     print("Install with: pip install stable-baselines3[extra]")
     raise
 
+# Try to source a RecurrentPPO implementation, if present
+try:
+    from stable_baselines3 import RecurrentPPO as RECUR_PPO_CLS
+except Exception:
+    try:
+        from sb3_contrib import RecurrentPPO as RECUR_PPO_CLS
+    except Exception:
+        RECUR_PPO_CLS = None
+
 from rl_trading_env import TradingEnv
 from rl_progress_monitor import RLProgressMonitor
 from rl_dashboard import RLDashboard
+from rl_experience_buffer import PrioritizedExperienceBuffer
+from rl_behavior_cloning import BehaviorCloningTrainer
+from rl_metrics_evaluator import MultiMetricEvaluator
 from utils.analytics import PerformanceAnalytics
 
 
@@ -78,9 +100,18 @@ RL_TRAINING_TIMEFRAMES = [
 
 
 class TrainingState:
-    """Manages training state for pause/resume"""
+    """Manages training state for pause/resume (per symbol/model_dir)."""
     
-    def __init__(self, state_file: str = "models/rl_training_state.json"):
+    def __init__(self, state_file: str):
+        """
+        Parameters
+        ----------
+        state_file : str
+            Path to the JSON file that will store training state for a single
+            symbol/model directory. Callers should pass a symbol-specific path
+            (e.g. `<model_dir>/<SYMBOL>/rl_training_state.json`) so that
+            multi-symbol training does not share timesteps/checkpoints.
+        """
         self.state_file = Path(state_file)
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self.state = self._load_state()
@@ -90,7 +121,11 @@ class TrainingState:
         if self.state_file.exists():
             try:
                 with open(self.state_file, 'r') as f:
-                    return json.load(f)
+                    state = json.load(f)
+                    # Backwards‑compatible default mode
+                    if "mode" not in state:
+                        state["mode"] = "training"
+                    return state
             except Exception:
                 pass
         return {
@@ -98,10 +133,19 @@ class TrainingState:
             'total_timesteps': 0,
             'last_checkpoint': None,
             'best_reward': float('-inf'),
-            'total_trades': 0
+            'total_trades': 0,
+            'mode': 'training',
         }
     
-    def save_state(self, episode: int, timesteps: int, checkpoint_path: str, best_reward: float, total_trades: int):
+    def save_state(
+        self,
+        episode: int,
+        timesteps: int,
+        checkpoint_path: str,
+        best_reward: float,
+        total_trades: int,
+        mode: str = "training",
+    ):
         """Save training state"""
         self.state = {
             'episode': episode,
@@ -109,7 +153,8 @@ class TrainingState:
             'last_checkpoint': checkpoint_path,
             'best_reward': best_reward,
             'total_trades': total_trades,
-            'timestamp': datetime.now().isoformat()
+            'mode': mode,
+            'timestamp': datetime.now().isoformat(),
         }
         try:
             with open(self.state_file, 'w') as f:
@@ -136,13 +181,78 @@ class PauseResumeCallback(BaseCallback):
         if self.pause_event.is_set():
             if not self.paused:
                 self.paused = True
-                print("\n[PAUSE] Training paused. Press 'r' to resume...")
+                print("\n[PAUSE] Training paused. Press Ctrl+C again to resume...")
             return False  # Stop training
         else:
             if self.paused:
                 self.paused = False
                 print("\n[RESUME] Training resumed...")
             return True
+
+
+class ExperienceReplayCallback(BaseCallback):
+    """
+    Callback that integrates experience replay buffers with PPO training.
+    After each rollout, samples from good/bad buffers and applies auxiliary
+    supervised learning to accelerate learning from mistakes.
+    """
+    
+    def __init__(
+        self,
+        experience_buffer: PrioritizedExperienceBuffer,
+        bc_trainer: BehaviorCloningTrainer,
+        bc_learning_rate: float = 1e-5,
+        bc_batch_size: int = 32,
+        bc_ratio: float = 0.1,  # 10% of updates come from BC
+        verbose: int = 0
+    ):
+        super().__init__(verbose)
+        self.experience_buffer = experience_buffer
+        self.bc_trainer = bc_trainer
+        self.bc_learning_rate = bc_learning_rate
+        self.bc_batch_size = bc_batch_size
+        self.bc_ratio = bc_ratio
+        self.episode_started = False
+    
+    def _on_rollout_start(self) -> None:
+        """Called when a new rollout starts"""
+        if not self.episode_started:
+            self.experience_buffer.start_episode()
+            self.episode_started = True
+    
+    def _on_step(self) -> bool:
+        """Called on each step - collect transitions"""
+        if self.episode_started:
+            obs = self.training_env.get_original_obs()
+            action = self.locals['actions']
+            reward = self.locals['rewards']
+            next_obs = self.locals['new_obs']
+            done = self.locals['dones']
+            info = self.locals['infos']
+            self.experience_buffer.add_transition(obs, action, reward, next_obs, done, info)
+        return True
+    
+    def _on_rollout_end(self) -> None:
+        """Called when rollout ends - process episode"""
+        if self.episode_started:
+            # Get final pnl and equity
+            final_pnl = self.training_env.get_attr("simulator")[0].equity - self.training_env.get_attr("starting_balance")[0]
+            final_equity = self.training_env.get_attr("simulator")[0].equity
+            
+            # End the episode in the buffer
+            self.experience_buffer.end_episode(final_pnl, final_equity)
+            self.episode_started = False
+
+            # Sample from buffer and train
+            good_transitions = self.experience_buffer.sample_transitions_from_good(self.bc_batch_size)
+            bad_transitions = self.experience_buffer.sample_transitions_from_bad(self.bc_batch_size)
+            
+            if self.bc_trainer is not None:
+                if good_transitions:
+                    self.bc_trainer.train_on_good_episodes(good_transitions)
+                if bad_transitions:
+                    self.bc_trainer.train_negative_correction(bad_transitions)
+
 
 
 class CustomPPONetwork(nn.Module):
@@ -218,12 +328,17 @@ class RLTrainer:
     
     def __init__(
         self,
-        symbol: str = "BTCUSDT",
-        starting_balance: float = 100000.0,
+        symbol: Optional[str] = None,
+        starting_balance: float = 1_000_000.0,
         max_trades: Optional[int] = None,  # None = unlimited
         model_dir: str = "models/rl_models",
         checkpoint_interval: int = 10000
     ):
+        """
+        If symbol is provided, the PPO model will be trained for only that
+        market. If symbol is None, a single shared policy is trained across
+        all symbols in RL_TRAINING_SYMBOLS.
+        """
         self.symbol = symbol
         self.starting_balance = starting_balance
         self.max_trades = max_trades
@@ -231,10 +346,13 @@ class RLTrainer:
         self.model_dir.mkdir(parents=True, exist_ok=True)
         self.checkpoint_interval = checkpoint_interval
         
-        # Training state
-        self.state_manager = TrainingState()
+        # Training state: one state file per logical model directory. In
+        # multi-symbol mode this is a shared state for the unified model.
+        state_path = self.model_dir / "rl_training_state.json"
+        self.state_manager = TrainingState(str(state_path))
         self.pause_event = threading.Event()
         self.is_paused = False
+        self.shutdown_event = threading.Event()  # Flag for graceful shutdown
         
         # Progress monitor
         self.progress_monitor = None
@@ -250,39 +368,302 @@ class RLTrainer:
         # Analytics for global accuracy (win rate)
         self.analytics = PerformanceAnalytics()
         
+        # Config path for persistence
+        self.acceptance_config_path = Path("config/rl_acceptance_criteria.json")
+
+        # Load acceptance criteria from config (conservative defaults)
+        self.acceptance_config = self._load_acceptance_config()
+        acceptance = self.acceptance_config.get("acceptance_criteria", {})
+        buffer_config = self.acceptance_config.get("experience_buffer", {})
+        norm_config = self.acceptance_config.get("normalization", {})
+        paper_config = self.acceptance_config.get("paper_testing", {})
+        training_config = self.acceptance_config.get("training_loop", {})
+        auto_tighten_config = self.acceptance_config.get("auto_tighten", {})
+        
+        # Experience replay buffers for accelerated learning
+        # Fixed capacities: 10k transitions each (top/bottom episodes)
+        self.experience_buffer = PrioritizedExperienceBuffer(
+            good_buffer_size=buffer_config.get("good_buffer_size", 10000),  # 5k-20k range
+            bad_buffer_size=buffer_config.get("bad_buffer_size", 10000),
+            good_percentile=buffer_config.get("good_percentile", 0.75),
+            bad_percentile=buffer_config.get("bad_percentile", 0.25),
+            persist_path=str(self.model_dir / "experience_buffers.json")
+        )
+        
+        # Sampling ratios from config
+        self.sampling_ratios = buffer_config.get("sampling_ratios", {
+            "on_policy_ppo": 0.75,
+            "bc_from_good": 0.15,
+            "negative_correction": 0.10
+        })
+        
+        # Multi-metric evaluator with stability windows (configurable)
+        self.metrics_evaluator = MultiMetricEvaluator(
+            win_rate_threshold=acceptance.get("win_rate_threshold", 68.0),
+            profit_factor_threshold=acceptance.get("profit_factor_threshold", 1.3),
+            sharpe_threshold=acceptance.get("sharpe_threshold", 1.0),
+            max_drawdown_threshold=acceptance.get("max_drawdown_threshold", 12.0),
+            min_trades_per_window=acceptance.get("min_trades_per_window", 500),
+            stability_windows_required=acceptance.get("stability_windows_required", 3),
+            window_size_trades=acceptance.get("window_size_trades", 500),
+        )
+        
+        # Training loop config (from training_config block; fall back to defaults)
+        # Core adaptive hyperparameters (needed even when loading from checkpoints)
+        self.initial_ent_coef = training_config.get("initial_ent_coef", 0.08)
+        self.min_ent_coef = training_config.get("min_ent_coef", 0.01)
+        self.initial_lr = training_config.get("initial_lr", 5e-4)
+        self.min_lr = training_config.get("min_lr", 1e-4)
+        self.entropy_decay_steps = training_config.get("entropy_decay_steps", 1_000_000)
+        # Respect constructor-provided checkpoint_interval unless overridden in config
+        self.checkpoint_interval = training_config.get("checkpoint_interval", self.checkpoint_interval)
+        self.max_trades_per_episode = training_config.get("max_trades_per_episode", 200)
+        # Delay evaluation until enough experience is collected to reduce early overfitting/false positives
+        self.min_timesteps_before_eval = training_config.get("min_timesteps_before_eval", 100_000)
+        
+        # Risk settings
+        risk_settings = training_config.get("risk_settings", {})
+        self.max_global_open_trades = risk_settings.get("max_global_open_trades", 20)
+        
+        # Behavior cloning trainer (initialized after model is created)
+        self.bc_trainer = None
+        
+        # Reward normalization (running mean/std for stable value function learning)
+        self.reward_clip_range = norm_config.get("reward_clip_range", [-1.0, 1.0])
+        self.use_running_mean_std = norm_config.get("use_running_mean_std", True)
+        self.reward_mean = 0.0
+        self.reward_std = 1.0
+        self.reward_count = 0
+        self.reward_history = deque(maxlen=10000)
+        
+        # Observation normalization (running mean/std)
+        self.observation_normalization = norm_config.get("observation_normalization", True)
+        self.obs_mean = None
+        self.obs_std = None
+        self.obs_count = 0
+        
+        # Paper testing config
+        self.keep_training_during_paper = paper_config.get("keep_training_during_paper", True)
+        self.auto_rollback_enabled = paper_config.get("auto_rollback_enabled", True)
+        self.rollback_threshold_drawdown = paper_config.get("rollback_threshold_drawdown", 15.0)
+        self.rollback_threshold_sharpe = paper_config.get("rollback_threshold_sharpe", 0.5)
+        self.paper_test_episodes = paper_config.get("paper_test_episodes", 5)
+        self.last_safe_model_path = None
+        self.current_mode = "training"  # Track current mode for rollback checks
+
+        # Auto-tighten settings (if repeated failures/rollbacks occur)
+        self.auto_tighten_enabled = auto_tighten_config.get("enabled", True)
+        self.auto_tighten_on_rollback = auto_tighten_config.get("on_rollback", True)
+        self.auto_tighten_on_eval_failures = auto_tighten_config.get("on_eval_failures", True)
+        self.auto_tighten_failures_before_tighten = auto_tighten_config.get("failures_before_tighten", 3)
+        self.auto_tighten_max_steps = auto_tighten_config.get("max_steps", 5)
+        self.auto_tighten_win_rate_inc = auto_tighten_config.get("win_rate_increment", 1.0)
+        self.auto_tighten_profit_factor_inc = auto_tighten_config.get("profit_factor_increment", 0.05)
+        self.auto_tighten_sharpe_inc = auto_tighten_config.get("sharpe_increment", 0.1)
+        self.auto_tighten_drawdown_dec = auto_tighten_config.get("drawdown_decrement", 0.5)
+        self.auto_tighten_applied = 0
+        self.eval_failures_since_tighten = 0
+        
         # Setup signal handlers for pause/resume
         self._setup_signal_handlers()
     
+    def _load_acceptance_config(self) -> Dict:
+        """Load acceptance criteria and training config from file"""
+        config_path = Path("config/rl_acceptance_criteria.json")
+        if config_path.exists():
+            try:
+                with open(config_path, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"[RL] Warning: Could not load acceptance config: {e}. Using defaults.")
+        # Return conservative defaults
+        return {
+            "acceptance_criteria": {
+                "win_rate_threshold": 68.0,
+                "profit_factor_threshold": 1.3,
+                "sharpe_threshold": 1.0,
+                "max_drawdown_threshold": 12.0,
+                "min_trades_per_window": 500,
+                "stability_windows_required": 3,
+                "window_size_trades": 500,
+            },
+            "experience_buffer": {
+                "good_buffer_size": 10000,
+                "bad_buffer_size": 10000,
+                "good_percentile": 0.75,
+                "bad_percentile": 0.25,
+                "sampling_ratios": {
+                    "on_policy_ppo": 0.75,
+                    "bc_from_good": 0.15,
+                    "negative_correction": 0.10
+                }
+            },
+            "normalization": {
+                "reward_clip_range": [-1.0, 1.0],
+                "use_running_mean_std": True,
+                "observation_normalization": True
+            },
+            "paper_testing": {
+                "keep_training_during_paper": True,
+                "auto_rollback_enabled": True,
+                "rollback_threshold_drawdown": 15.0,
+                "rollback_threshold_sharpe": 0.5,
+                "paper_test_episodes": 5
+            },
+            "training_loop": {
+                "min_timesteps_before_eval": 100_000
+            },
+            "auto_tighten": {
+                "enabled": True,
+                "on_rollback": True,
+                "on_eval_failures": True,
+                "failures_before_tighten": 3,
+                "max_steps": 5,
+                "win_rate_increment": 1.0,
+                "profit_factor_increment": 0.05,
+                "sharpe_increment": 0.1,
+                "drawdown_decrement": 0.5
+            }
+        }
+    
+    def _normalize_reward(self, reward: float) -> float:
+        """Normalize reward using running mean/std and clip"""
+        if self.use_running_mean_std:
+            # Update running statistics
+            self.reward_count += 1
+            self.reward_history.append(reward)
+            
+            # Calculate running mean and std
+            if len(self.reward_history) > 100:  # Need some history
+                self.reward_mean = np.mean(self.reward_history)
+                self.reward_std = np.std(self.reward_history)
+                if self.reward_std < 1e-8:
+                    self.reward_std = 1.0
+            
+            # Normalize
+            if self.reward_std > 1e-8:
+                normalized = (reward - self.reward_mean) / self.reward_std
+            else:
+                normalized = reward
+        else:
+            normalized = reward
+        
+        # Clip to reasonable range
+        return np.clip(normalized, self.reward_clip_range[0], self.reward_clip_range[1])
+    
     def _setup_signal_handlers(self):
-        """Setup signal handlers for pause/resume"""
+        """Setup signal handlers for pause/resume and graceful shutdown"""
         def signal_handler(sig, frame):
             if self.is_paused:
                 print("\n[RESUME] Resuming training...")
                 self.pause_event.clear()
                 self.is_paused = False
             else:
-                print("\n[PAUSE] Pausing training (press Ctrl+C again to resume)...")
+                print("\n[PAUSE] Pausing training (press Ctrl+C again to resume, or Ctrl+Q to save and exit)...")
                 self.pause_event.set()
                 self.is_paused = True
         
         # Handle Ctrl+C for pause/resume
         signal.signal(signal.SIGINT, signal_handler)
+        
+        # Setup keyboard listener for Ctrl+Q (save and exit)
+        self._setup_keyboard_listener()
+    
+    def _setup_keyboard_listener(self):
+        """Setup keyboard listener for 'q' key to save and exit"""
+        def keyboard_listener():
+            """Listen for 'q' key press to trigger graceful shutdown"""
+            import sys
+            import platform
+            
+            # Windows-specific keyboard detection
+            if platform.system() == 'Windows':
+                try:
+                    import msvcrt
+                    while not self.shutdown_event.is_set():
+                        # Check for 'q' key press (Windows)
+                        if msvcrt.kbhit():
+                            key = msvcrt.getch()
+                            # Handle both regular 'q' and Ctrl+Q (0x11)
+                            if key == b'q' or key == b'Q' or key == b'\x11':
+                                print("\n[SHUTDOWN] 'q' key detected. Saving state and shutting down gracefully...")
+                                self.shutdown_event.set()
+                                break
+                        time.sleep(0.1)  # Check every 100ms
+                except ImportError:
+                    # Fallback: use input thread
+                    pass
+            else:
+                # Unix/Linux approach
+                try:
+                    import select
+                    import termios
+                    import tty
+                    # Set terminal to raw mode
+                    old_settings = termios.tcgetattr(sys.stdin)
+                    try:
+                        tty.setraw(sys.stdin.fileno())
+                        while not self.shutdown_event.is_set():
+                            if select.select([sys.stdin], [], [], 0.1)[0]:
+                                key = sys.stdin.read(1)
+                                if key.lower() == 'q' or ord(key) == 17:  # 'q' or Ctrl+Q
+                                    print("\n[SHUTDOWN] 'q' key detected. Saving state and shutting down gracefully...")
+                                    self.shutdown_event.set()
+                                    break
+                    finally:
+                        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+                except (ImportError, AttributeError, OSError):
+                    # If terminal manipulation fails, use simple input
+                    pass
+        
+        # Start keyboard listener in background thread
+        keyboard_thread = threading.Thread(target=keyboard_listener, daemon=True)
+        keyboard_thread.start()
     
     def create_environment(self):
-        """Create trading environment"""
-        def make_env():
-            env = TradingEnv(
-                symbol=self.symbol,
-                starting_balance=self.starting_balance,
-                lookback_window=100,
-                max_trades=self.max_trades  # Pass max_trades (None = unlimited)
-            )
-            # Wrap with Monitor for stats
-            env = Monitor(env, filename=str(self.model_dir / "training_monitor.csv"))
-            return env
-        
-        # Create vectorized environment
-        self.env = DummyVecEnv([make_env])
+        """Create trading environment.
+
+        If self.symbol is set, a single-symbol environment is created.
+        If self.symbol is None, we build one environment per symbol in
+        RL_TRAINING_SYMBOLS and train a single shared PPO policy across
+        all of them (multi-market learning).
+        """
+        symbols = [self.symbol] if self.symbol else RL_TRAINING_SYMBOLS
+
+        def make_env(idx: int, sym: str):
+            def _thunk():
+                env = TradingEnv(
+                    symbol=sym,
+                    starting_balance=self.starting_balance,
+                    lookback_window=100,
+                    max_trades=self.max_trades,  # None = unlimited
+                    symbol_index=idx,
+                    total_symbols=len(symbols),
+                    use_continuous_actions=False,  # Keep discrete for now (can enable later)
+                    domain_randomization=True,  # Enable domain randomization
+                    kill_switch_enabled=False,  # Allow exploration; drawdown still penalized via reward
+                )
+                # Wrap with Monitor for stats
+                monitor_path = self.model_dir / f"training_monitor_{sym}.csv"
+                env_mon = Monitor(env, filename=str(monitor_path))
+                return env_mon
+
+            return _thunk
+
+        env_fns = [make_env(i, s) for i, s in enumerate(symbols)]
+        # NOTE: On Windows, SubprocVecEnv often fails due to pickling issues (thread locks, etc.).
+        # To keep training stable, we default to DummyVecEnv on Windows and only enable
+        # SubprocVecEnv when explicitly requested AND the OS is not Windows.
+        use_subproc = (
+            os.getenv('USE_SUBPROC_VEC', '0') == '1'
+            and len(env_fns) > 1
+            and os.name != 'nt'
+        )
+        if use_subproc:
+            vec = SubprocVecEnv(env_fns)
+        else:
+            vec = DummyVecEnv(env_fns)
+        self.env = VecNormalize(vec, norm_obs=True, norm_reward=False, clip_obs=10.)
         return self.env
     
     def create_model(self, load_checkpoint: bool = True):
@@ -316,17 +697,37 @@ class RLTrainer:
             def forward(self, observations):
                 return self.net(observations)
         
-        # Policy kwargs with custom network
+        # Optimized network architecture for trading (faster learning, better generalization)
+        # Slightly smaller but deeper network for better feature extraction
         policy_kwargs = {
-            "features_extractor_class": CustomFeatureExtractor,
-            "features_extractor_kwargs": {"features_dim": 512},
-            "net_arch": [dict(pi=[512, 512, 256, 128], vf=[512, 512, 256, 128])]
+            "net_arch": dict(
+                pi=[256, 256, 128, 64],  # Policy network: optimized for action selection
+                vf=[256, 256, 128, 64]   # Value network: optimized for value estimation
+            )
         }
         
-        # Try to load existing model
-        if load_checkpoint and state['last_checkpoint']:
-            checkpoint_path = state['last_checkpoint']
-            if os.path.exists(checkpoint_path):
+        # Try to load existing model - check multiple locations
+        if load_checkpoint:
+            checkpoint_path = None
+            
+            # First, try the checkpoint from state file
+            if state.get('last_checkpoint'):
+                if os.path.exists(state['last_checkpoint']):
+                    checkpoint_path = state['last_checkpoint']
+                else:
+                    print(f"[RL] Warning: Checkpoint from state file not found: {state['last_checkpoint']}")
+            
+            # If state checkpoint doesn't exist, look for latest checkpoint in checkpoints directory
+            if not checkpoint_path:
+                checkpoints_dir = self.model_dir / "checkpoints"
+                if checkpoints_dir.exists():
+                    checkpoints = sorted(checkpoints_dir.glob("rl_model_*.zip"))
+                    if checkpoints:
+                        checkpoint_path = str(checkpoints[-1])  # Use latest checkpoint
+                        print(f"[RL] Found latest checkpoint: {checkpoint_path}")
+            
+            # Try to load the checkpoint
+            if checkpoint_path and os.path.exists(checkpoint_path):
                 try:
                     print(f"[RL] Loading model from {checkpoint_path}")
                     self.model = PPO.load(
@@ -334,31 +735,74 @@ class RLTrainer:
                         env=self.env,
                         device='auto'
                     )
-                    print(f"[RL] Model loaded successfully. Continuing from episode {state['episode']}")
+                    # Update entropy coefficient adaptively based on training progress
+                    total_timesteps = state.get('total_timesteps', 0)
+                    progress = min(1.0, total_timesteps / 1_000_000)  # Decay over 1M steps
+                    adaptive_ent = 0.08 * (1.0 - progress * 0.875) + 0.01  # Decay from 0.08 to 0.01
+                    self.model.ent_coef = max(0.01, adaptive_ent)
+                    print(f"[RL] Model loaded successfully. Continuing from episode {state['episode']}, timesteps: {state['total_timesteps']}")
+                    print(f"[RL] Adaptive entropy coefficient: {self.model.ent_coef:.4f} (progress: {progress*100:.1f}%)")
                     return self.model
                 except Exception as e:
-                    print(f"[RL] Error loading model: {e}. Creating new model...")
+                    print(f"[RL] Error loading model: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    print(f"[RL] Creating new model instead...")
+            else:
+                print(f"[RL] No checkpoint found. Creating new model...")
         
-        # Create new model
-        print("[RL] Creating new PPO model with custom neural network...")
-        self.model = PPO(
-            "MlpPolicy",
+        # Create new model with optimized hyperparameters for fast learning and real market performance
+        print("[RL] Creating new PPO model with optimized hyperparameters for fast learning...")
+        
+        # Optimized hyperparameters based on research and trading RL best practices:
+        # - Higher learning rate for faster convergence
+        # - More frequent updates (smaller n_steps)
+        # - Better gradient estimates (larger batch size)
+        # - Balanced exploration/exploitation (adaptive entropy)
+        
+        # Choose algorithm: RecurrentPPO if available and enabled, else PPO
+        use_recurrent = os.getenv('USE_RECURRENT_PPO', '1') == '1' and RECUR_PPO_CLS is not None
+        algo_cls = RECUR_PPO_CLS if use_recurrent else PPO
+        policy_name = 'MlpLstmPolicy' if use_recurrent else 'MlpPolicy'
+
+        self.model = algo_cls(
+            policy_name,
             self.env,
-            policy_kwargs=policy_kwargs,
-            learning_rate=3e-4,
-            n_steps=2048,
-            batch_size=64,
-            n_epochs=10,
-            gamma=0.99,
-            gae_lambda=0.95,
-            clip_range=0.2,
-            ent_coef=0.01,
+            policy_kwargs=policy_kwargs if not use_recurrent else None,
+            learning_rate=5e-4,
+            n_steps=1024,
+            batch_size=128,
+            n_epochs=8,
+            gamma=0.995,
+            gae_lambda=0.98,
+            clip_range=0.15,
+            ent_coef=0.08,
             vf_coef=0.5,
-            max_grad_norm=0.5,
+            max_grad_norm=1.0,
             verbose=1,
             device='auto',
             tensorboard_log=str(self.model_dir / "tensorboard")
         )
+        
+        # Store initial entropy for adaptive decay
+        self.initial_ent_coef = 0.08
+        self.min_ent_coef = 0.01
+        self.entropy_decay_steps = 1_000_000  # Decay over 1M steps
+        self.initial_lr = 5e-4
+        self.min_lr = 1e-4
+        
+        # Initialize behavior cloning trainer
+        try:
+            self.bc_trainer = BehaviorCloningTrainer(
+                policy=self.model.policy,
+                learning_rate=1e-5,
+                bc_weight=0.1,
+                negative_weight=0.05
+            )
+            print("[RL] Behavior cloning trainer initialized")
+        except Exception as e:
+            print(f"[RL] Warning: Could not initialize BC trainer: {e}")
+            self.bc_trainer = None
         
         return self.model
     
@@ -389,25 +833,94 @@ class RLTrainer:
             self.dashboard.start()
             print("[RL] Dashboard started")
     
+    def start_trade_update_thread(self):
+        """Start background thread to continuously update trades and check TP/SL"""
+        def trade_update_loop():
+            """Continuously update all simulators to check for TP/SL hits"""
+            import time
+            while not self.shutdown_event.is_set():
+                try:
+                    if self.env is None:
+                        time.sleep(5.0)
+                        continue
+                    
+                    # VecNormalize wraps VecEnv, need to unwrap
+                    vec_env = self.env
+                    if hasattr(self.env, 'venv'):
+                        vec_env = self.env.venv
+                    
+                    # Get all environments and their simulators
+                    if hasattr(vec_env, 'envs'):
+                        # VecEnv - iterate through all environments
+                        for env in vec_env.envs:
+                            # Unwrap any additional wrappers
+                            unwrapped = env
+                            while hasattr(unwrapped, 'unwrapped'):
+                                unwrapped = unwrapped.unwrapped
+                            
+                            if hasattr(unwrapped, 'simulator'):
+                                try:
+                                    # Update simulator to check TP/SL
+                                    unwrapped.simulator.step()
+                                except Exception as e:
+                                    # Log but don't crash
+                                    pass
+                    elif hasattr(vec_env, 'simulator'):
+                        # Single environment
+                        try:
+                            vec_env.simulator.step()
+                        except Exception as e:
+                            pass
+                    
+                    # Sleep for 2 seconds between updates (frequent enough to catch TP/SL quickly)
+                    time.sleep(2.0)
+                    
+                except Exception as e:
+                    # Log error but continue
+                    time.sleep(5.0)  # Longer sleep on error
+        
+        # Start the thread
+        self.trade_update_thread = threading.Thread(target=trade_update_loop, daemon=True)
+        self.trade_update_thread.start()
+        print("[RL] Background trade update thread started (checks TP/SL every 2 seconds)")
+    
     def train(
         self,
-        total_timesteps: int = 1000000,
+        total_timesteps: int = 0,
         use_monitor: bool = False,
         use_dashboard: bool = False,
-        accuracy_threshold: float = 99.0,
-        min_trades_for_threshold: int = 50,
+        accuracy_threshold: float = 68.0,  # Legacy parameter (now using multi-metric gate)
+        min_trades_for_threshold: int = 500,  # Minimum trades per evaluation window
     ):
-        """Train the RL agent"""
-        # Create environment
+        """Train the RL agent.
+
+        If total_timesteps is <= 0, the trainer will run in an open‑ended
+        loop and continue improving until the multi-metric gate is passed
+        (win rate + profit factor + Sharpe + drawdown across 3 consecutive
+        stability windows). This still fully supports pause/resume via the
+        TrainingState and Ctrl+C handler.
+        """
+        # Create environment FIRST (required before loading model)
         self.create_environment()
         
-        # Create or load model
-        self.create_model(load_checkpoint=True)
+        # Create or load model (skip checkpoint if fresh_start is True)
+        load_checkpoint = not getattr(self, '_fresh_start', False)
+        self.create_model(load_checkpoint=load_checkpoint)
+        
+        # Debug: Print model info
+        if self.model:
+            print(f"[RL] Model created/loaded. Policy type: {type(self.model.policy)}")
+            print(f"[RL] Entropy coefficient: {self.model.ent_coef}")
+            print(f"[RL] Action space: {self.env.action_space}")
+            print(f"[RL] Observation space shape: {self.env.observation_space.shape}")
         
         # Note: Progress monitor and dashboard are now optional so that
         # rl_training.py can run with simple, non-glitchy terminal output
         # by default. They can be enabled via CLI flags.
 
+        # Start background trade update thread (CRITICAL: ensures trades close on TP/SL)
+        self.start_trade_update_thread()
+        
         # Start optional progress monitor
         if use_monitor:
             self.start_progress_monitor()
@@ -416,19 +929,39 @@ class RLTrainer:
         if use_dashboard:
             self.start_dashboard()
         
+        # If starting fresh, reset persisted training state to zero so we don't skip work
+        if getattr(self, "_fresh_start", False):
+            self.state_manager.save_state(
+                episode=0,
+                timesteps=0,
+                checkpoint_path=None,
+                best_reward=float("-inf"),
+                total_trades=0,
+                mode="training",
+            )
+        
         # Load state
         state = self.state_manager.get_state()
         current_timesteps = state['total_timesteps']
-        remaining_timesteps = max(0, total_timesteps - current_timesteps)
+        infinite_mode = total_timesteps <= 0
+        remaining_timesteps = max(0, total_timesteps - current_timesteps) if not infinite_mode else -1
+        current_mode = state.get("mode", "training")
+        
+        # Update mode tracking for rollback checks
+        self.current_mode = current_mode
         
         print(f"\n[RL] Starting training...")
-        print(f"[RL] Total timesteps: {total_timesteps}")
-        print(f"[RL] Already trained: {current_timesteps}")
-        print(f"[RL] Remaining: {remaining_timesteps}")
+        if infinite_mode:
+            print(f"[RL] Mode: open‑ended (until accuracy threshold reached)")
+        else:
+            print(f"[RL] Total timesteps: {total_timesteps}")
+            print(f"[RL] Already trained: {current_timesteps}")
+            print(f"[RL] Remaining: {remaining_timesteps}")
         print(f"[RL] Max trades limit: {self.max_trades if self.max_trades else 'Unlimited'}")
-        print(f"[RL] Press Ctrl+C to pause/resume training\n")
+        print(f"[RL] Press Ctrl+C to pause/resume training")
+        print(f"[RL] Press 'q' to save state and exit gracefully\n")
         
-        # Custom callback for pause/resume and checkpointing
+        
         callbacks = [
             PauseResumeCallback(self.state_manager, self.pause_event),
             CheckpointCallback(
@@ -437,6 +970,10 @@ class RLTrainer:
                 name_prefix="rl_model",
                 save_replay_buffer=True,
                 save_vecnormalize=True
+            ),
+            ExperienceReplayCallback(
+                experience_buffer=self.experience_buffer,
+                bc_trainer=self.bc_trainer,
             )
         ]
         
@@ -444,16 +981,41 @@ class RLTrainer:
         best_reward = state.get('best_reward', float('-inf'))
         
         try:
-            # Train in chunks to allow for pause/resume
-            chunk_size = min(remaining_timesteps, 50000)
+            # Train in chunks to allow for pause/resume. In open‑ended mode
+            # we simply keep stepping forward in fixed chunks until the
+            # accuracy threshold logic stops us.
+            default_chunk = 50_000
+            chunk_size = default_chunk if infinite_mode else min(remaining_timesteps, default_chunk)
             
-            while remaining_timesteps > 0:
+            while infinite_mode or remaining_timesteps > 0:
+                # Check for graceful shutdown
+                if self.shutdown_event.is_set():
+                    print("\n[RL] Graceful shutdown requested. Saving state...")
+                    break
+                
                 # Check if paused
                 if self.pause_event.is_set():
-                    print("[RL] Training paused. Waiting...")
+                    print("[RL] Training paused. Waiting... (Press 'q' to save and exit)")
                     while self.pause_event.is_set():
-                        time.sleep(1)
+                        if self.shutdown_event.is_set():
+                            print("\n[RL] Graceful shutdown requested during pause. Saving state...")
+                            break
+                        time.sleep(0.5)
+                    if self.shutdown_event.is_set():
+                        break
                     print("[RL] Training resumed")
+                
+                # Adaptive entropy and learning rate decay: reduce exploration/learning rate as training progresses
+                total_timesteps_before = current_timesteps
+                progress = min(1.0, total_timesteps_before / self.entropy_decay_steps)
+                
+                # Adaptive entropy: decay from 0.08 to 0.01 over 1M steps
+                adaptive_ent = self.initial_ent_coef * (1.0 - progress * 0.875) + self.min_ent_coef
+                self.model.ent_coef = max(self.min_ent_coef, adaptive_ent)
+                
+                # Adaptive learning rate: decay from 5e-4 to 1e-4 over 1M steps
+                adaptive_lr = self.initial_lr * (1.0 - progress * 0.8) + self.min_lr
+                self.model.learning_rate = max(self.min_lr, adaptive_lr)
                 
                 # Train for a chunk
                 self.model.learn(
@@ -463,9 +1025,14 @@ class RLTrainer:
                     tb_log_name="PPO"
                 )
                 
+                # Log adaptive parameters
+                if episode % 10 == 0:
+                    print(f"[RL] Adaptive parameters: LR={self.model.learning_rate:.6f}, Entropy={self.model.ent_coef:.4f}, Progress={progress*100:.1f}%")
+                
                 # Update state
                 current_timesteps += chunk_size
-                remaining_timesteps -= chunk_size
+                if not infinite_mode:
+                    remaining_timesteps -= chunk_size
                 episode += 1
                 
                 # Get latest episode stats
@@ -488,12 +1055,15 @@ class RLTrainer:
                         if checkpoints:
                             checkpoint_path = str(checkpoints[-1])
                 
+                # Persist state with the current mode (training or paper) so dashboards/status
+                # reflect what the loop is actually doing.
                 self.state_manager.save_state(
                     episode=episode,
                     timesteps=current_timesteps,
                     checkpoint_path=checkpoint_path,
                     best_reward=best_reward,
-                    total_trades=total_trades
+                    total_trades=total_trades,
+                    mode=self.current_mode,
                 )
                 
                 # Update progress monitor
@@ -504,53 +1074,266 @@ class RLTrainer:
                         'total_trades': total_trades
                     })
                 
-                # Update dashboard model
+                # Update dashboard model and verify connection
                 if self.dashboard:
                     self.dashboard.update_model(self.model)
+                    # Verify dashboard is running
+                    if not self.dashboard.running:
+                        print("[RL] ⚠️ Dashboard is not running! Restarting...")
+                        self.dashboard.start()
+                    elif self.dashboard.update_thread and not self.dashboard.update_thread.is_alive():
+                        print("[RL] ⚠️ Dashboard thread died! Restarting...")
+                        self.dashboard.start()
                 
-                print(f"\n[RL] Progress: {current_timesteps}/{total_timesteps} timesteps "
-                      f"({current_timesteps/total_timesteps*100:.1f}%) - Trades: {total_trades}")
-
-                # Check global accuracy (win rate) from trades database
+                # Get episode rewards and update best_reward
                 try:
-                    # Global accuracy: use all closed trades across all symbols
-                    trades = self.analytics.get_closed_trades(symbol=None, days=None)
-                    if trades:
-                        metrics = self.analytics.calculate_metrics(trades)
-                        win_rate = metrics.get("win_rate", 0.0)
-                        total_trades_global = metrics.get("total_trades", 0)
-                        print(f"[RL] Global win rate: {win_rate:.2f}% over {total_trades_global} trades")
-
-                        # If we have enough trades and win rate exceeds threshold, save model and run paper test
-                        if total_trades_global >= min_trades_for_threshold and win_rate >= accuracy_threshold:
-                            best_model_path = self.model_dir / f"best_model_{win_rate:.2f}_acc.zip"
-                            self.model.save(str(best_model_path))
-                            print(f"[RL] Accuracy threshold reached ({win_rate:.2f}%). "
-                                  f"Best model saved to {best_model_path}")
-
-                            # Run paper-testing mode with the best model
-                            self._run_paper_test(str(best_model_path))
-                            print("[RL] Paper testing completed after reaching accuracy threshold. Stopping training loop.")
-                            return
+                    if hasattr(self.env, 'get_episode_rewards'):
+                        episode_rewards = self.env.get_episode_rewards()
+                        if episode_rewards:
+                            latest_reward = episode_rewards[-1]
+                            if latest_reward > best_reward:
+                                best_reward = latest_reward
+                                print(f"[RL] New best reward: {best_reward:.4f}")
                 except Exception as e:
-                    print(f"[RL] Error while evaluating global accuracy: {e}")
+                    print(f"[RL] Warning: Could not get episode rewards: {e}")
+
+                if infinite_mode:
+                    print(f"\n[RL] Progress: {current_timesteps:,} timesteps - Trades: {total_trades}")
+                else:
+                    print(f"\n[RL] Progress: {current_timesteps}/{total_timesteps} timesteps "
+                          f"({current_timesteps/total_timesteps*100:.1f}%) - Trades: {total_trades}")
+
+                # Multi-metric evaluation with stability windows (skip early to reduce overfitting)
+                try:
+                    if current_timesteps >= self.min_timesteps_before_eval:
+                        # Get all closed trades from database (no symbol filter, no time filter)
+                        trades = self.analytics.get_closed_trades(symbol=None, days=None)
+                        
+                        # Debug: Print trade count for troubleshooting
+                        if len(trades) == 0:
+                            print(f"[RL] Warning: No closed trades found in database (path: {self.analytics.db_path})")
+                            print(f"[RL] This may be normal early in training. Trades will appear as they are closed.")
+                        else:
+                            print(f"[RL] Found {len(trades)} closed trades in database for evaluation")
+                        
+                        if trades and len(trades) >= min_trades_for_threshold:
+                            # Check stability using multi-metric gate
+                            stable, summary = self.metrics_evaluator.check_stability(trades)
+                            
+                            current_metrics = summary.get('current_window', {})
+                            win_rate = current_metrics.get('win_rate', 0.0)
+                            profit_factor = current_metrics.get('profit_factor', 0.0)
+                            sharpe = current_metrics.get('sharpe_ratio', 0.0)
+                            drawdown = current_metrics.get('max_drawdown_pct', 100.0)
+                            
+                            print(f"[RL] Multi-metric evaluation:")
+                            print(f"  Win Rate: {win_rate:.2f}% (target: ≥{self.metrics_evaluator.win_rate_threshold}%) {'✓' if current_metrics.get('win_rate_ok') else '✗'}")
+                            print(f"  Profit Factor: {profit_factor:.2f} (target: ≥{self.metrics_evaluator.profit_factor_threshold}) {'✓' if current_metrics.get('profit_factor_ok') else '✗'}")
+                            print(f"  Sharpe Ratio: {sharpe:.2f} (target: ≥{self.metrics_evaluator.sharpe_threshold}) {'✓' if current_metrics.get('sharpe_ok') else '✗'}")
+                            print(f"  Max Drawdown: {drawdown:.2f}% (target: ≤{self.metrics_evaluator.max_drawdown_threshold}%) {'✓' if current_metrics.get('drawdown_ok') else '✗'}")
+                            print(f"  Stability: {summary.get('windows_passed', 0)}/{summary.get('windows_evaluated', 0)} windows passed (need {self.metrics_evaluator.stability_windows_required} consecutive)")
+
+                            # If stable across multiple windows, save model and run paper test
+                            if stable:
+                                # Reset failure counter on success
+                                self.eval_failures_since_tighten = 0
+                                best_model_path = self.model_dir / f"best_model_{win_rate:.2f}wr_{profit_factor:.2f}pf.zip"
+                                self.model.save(str(best_model_path))
+                                self.last_safe_model_path = str(best_model_path)  # Track for rollback
+                                print(f"\n[RL] ✅ Multi-metric gate PASSED with stability!")
+                                print(f"[RL] Best model saved to {best_model_path}")
+                                print(f"[RL] Metrics: WR={win_rate:.2f}%, PF={profit_factor:.2f}, Sharpe={sharpe:.2f}, DD={drawdown:.2f}%")
+
+                                # Switch to paper testing mode (but keep training running if configured)
+                                if self.keep_training_during_paper:
+                                    print(f"[RL] Switching to paper testing mode (training continues in background for rollback)")
+                                    self.state_manager.save_state(
+                                        episode=episode,
+                                        timesteps=current_timesteps,
+                                        checkpoint_path=checkpoint_path,
+                                        best_reward=best_reward,
+                                        total_trades=total_trades,
+                                        mode="paper",
+                                    )
+                                    self.current_mode = "paper"  # Update mode tracking
+                                    # Continue training loop but monitor for rollback
+                                    # Paper testing happens in parallel via dashboard/monitor
+                                else:
+                                    # Run paper-testing mode with the best model (legacy behavior)
+                                    self._run_paper_test(str(best_model_path), test_episodes=getattr(self, "paper_test_episodes", 5))
+                                    print("[RL] Paper testing completed. Stopping training loop.")
+                                    return
+                            else:
+                                # Count failure and maybe tighten thresholds
+                                self._record_eval_failure()
+                            
+                            # Auto-rollback check: if metrics degrade significantly during paper testing
+                            if self.current_mode == "paper" and self.auto_rollback_enabled:
+                                if drawdown > self.rollback_threshold_drawdown or sharpe < self.rollback_threshold_sharpe:
+                                    print(f"\n[RL] ⚠️  AUTO-ROLLBACK TRIGGERED!")
+                                    print(f"[RL] Metrics degraded: DD={drawdown:.2f}% (threshold: {self.rollback_threshold_drawdown}%), "
+                                          f"Sharpe={sharpe:.2f} (threshold: {self.rollback_threshold_sharpe})")
+                                    if self.last_safe_model_path and os.path.exists(self.last_safe_model_path):
+                                        print(f"[RL] Rolling back to last safe model: {self.last_safe_model_path}")
+                                        try:
+                                            self.model = PPO.load(self.last_safe_model_path, env=self.env, device='auto')
+                                            self.state_manager.save_state(
+                                                episode=episode,
+                                                timesteps=current_timesteps,
+                                                checkpoint_path=self.last_safe_model_path,
+                                                best_reward=best_reward,
+                                                total_trades=total_trades,
+                                                mode="training",  # Back to training mode
+                                            )
+                                            self.current_mode = "training"  # Update mode tracking
+                                            print(f"[RL] Rollback successful. Resuming training.")
+                                        except Exception as e:
+                                            print(f"[RL] Rollback failed: {e}")
+                                    else:
+                                        print(f"[RL] No safe model found for rollback. Continuing with current model.")
+                                    # Auto-tighten if configured
+                                    self._auto_tighten_thresholds(reason="rollback")
+                    else:
+                        # Too early to evaluate; defer to avoid overfitting/false positives
+                        if current_timesteps % 50_000 == 0:
+                            print(f"[RL] Skipping evaluation until {self.min_timesteps_before_eval} timesteps (current: {current_timesteps})")
+                except Exception as e:
+                    print(f"[RL] Error while evaluating metrics: {e}")
+                    import traceback
+                    traceback.print_exc()
         
         except KeyboardInterrupt:
             print("\n[RL] Training interrupted. Saving final checkpoint...")
-            final_path = self.model_dir / "final_model.zip"
-            self.model.save(str(final_path))
-            print(f"[RL] Final model saved to {final_path}")
+            # Get current state before saving
+            try:
+                if hasattr(self.env, 'get_attr'):
+                    info = self.env.get_attr('total_trades_executed', [0])[0] if hasattr(self.env, 'get_attr') else 0
+                    total_trades = info if isinstance(info, (int, float)) else state.get('total_trades', 0)
+                else:
+                    total_trades = state.get('total_trades', 0)
+            except:
+                total_trades = state.get('total_trades', 0)
+            self._save_final_state(episode, current_timesteps, best_reward, total_trades)
+        
+        # Handle graceful shutdown
+        if self.shutdown_event.is_set():
+            print("\n[RL] Performing graceful shutdown...")
+            try:
+                if hasattr(self.env, 'get_attr'):
+                    info = self.env.get_attr('total_trades_executed', [0])[0] if hasattr(self.env, 'get_attr') else 0
+                    total_trades = info if isinstance(info, (int, float)) else state.get('total_trades', 0)
+                else:
+                    total_trades = state.get('total_trades', 0)
+            except:
+                total_trades = state.get('total_trades', 0)
+            self._save_final_state(episode, current_timesteps, best_reward, total_trades)
         
         print("\n[RL] Training completed!")
+    
+    def _save_final_state(self, episode, current_timesteps, best_reward, total_trades):
+        """Save final model and state before shutdown"""
+        try:
+            # Save final model checkpoint
+            final_path = self.model_dir / "final_model.zip"
+            if self.model:
+                self.model.save(str(final_path))
+                print(f"[RL] Final model saved to {final_path}")
+            
+            # Save final state
+            checkpoint_path = str(self.model_dir / "checkpoints" / f"rl_model_{current_timesteps}_steps.zip")
+            if not os.path.exists(checkpoint_path):
+                # Use latest checkpoint if final doesn't exist
+                checkpoints_dir = self.model_dir / "checkpoints"
+                if checkpoints_dir.exists():
+                    checkpoints = sorted(checkpoints_dir.glob("rl_model_*.zip"))
+                    if checkpoints:
+                        checkpoint_path = str(checkpoints[-1])
+            
+            self.state_manager.save_state(
+                episode=episode,
+                timesteps=current_timesteps,
+                checkpoint_path=checkpoint_path,
+                best_reward=best_reward,
+                total_trades=total_trades,
+                mode=self.current_mode,
+            )
+            print(f"[RL] Training state saved: Episode {episode}, Timesteps {current_timesteps:,}, Trades {total_trades}")
+            print(f"[RL] You can resume training from this checkpoint next time.")
+        except Exception as e:
+            print(f"[RL] Error saving final state: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _auto_tighten_thresholds(self, reason: str = ""):
+        """Automatically tighten acceptance thresholds after repeated failures or rollbacks."""
+        if not self.auto_tighten_enabled:
+            return
+        if self.auto_tighten_applied >= self.auto_tighten_max_steps:
+            print(f"[RL] Auto-tighten max steps reached ({self.auto_tighten_max_steps}). No further tightening.")
+            return
+
+        self.auto_tighten_applied += 1
+        self.eval_failures_since_tighten = 0
+
+        # Tighten acceptance criteria
+        self.metrics_evaluator.win_rate_threshold += self.auto_tighten_win_rate_inc
+        self.metrics_evaluator.profit_factor_threshold += self.auto_tighten_profit_factor_inc
+        self.metrics_evaluator.sharpe_threshold += self.auto_tighten_sharpe_inc
+        self.metrics_evaluator.max_drawdown_threshold = max(
+            1.0,  # prevent too strict (never 0)
+            self.metrics_evaluator.max_drawdown_threshold - self.auto_tighten_drawdown_dec
+        )
+
+        # Persist to config file to survive restarts
+        try:
+            self.acceptance_config["acceptance_criteria"]["win_rate_threshold"] = self.metrics_evaluator.win_rate_threshold
+            self.acceptance_config["acceptance_criteria"]["profit_factor_threshold"] = self.metrics_evaluator.profit_factor_threshold
+            self.acceptance_config["acceptance_criteria"]["sharpe_threshold"] = self.metrics_evaluator.sharpe_threshold
+            self.acceptance_config["acceptance_criteria"]["max_drawdown_threshold"] = self.metrics_evaluator.max_drawdown_threshold
+            self.acceptance_config["auto_tighten"] = self.acceptance_config.get("auto_tighten", {})
+            self.acceptance_config["auto_tighten"]["applied"] = self.auto_tighten_applied
+            self.acceptance_config["auto_tighten"]["last_reason"] = reason
+            with open(self.acceptance_config_path, "w") as f:
+                json.dump(self.acceptance_config, f, indent=2)
+            print(f"[RL] Auto-tighten applied (reason: {reason}). New thresholds -> "
+                  f"WR≥{self.metrics_evaluator.win_rate_threshold:.2f}%, "
+                  f"PF≥{self.metrics_evaluator.profit_factor_threshold:.2f}, "
+                  f"Sharpe≥{self.metrics_evaluator.sharpe_threshold:.2f}, "
+                  f"DD≤{self.metrics_evaluator.max_drawdown_threshold:.2f}% "
+                  f"(step {self.auto_tighten_applied}/{self.auto_tighten_max_steps})")
+        except Exception as exc:
+            print(f"[RL] Warning: Failed to persist auto-tighten config: {exc}")
+
+    def _record_eval_failure(self):
+        """Count consecutive evaluation failures and trigger auto-tighten if needed."""
+        if not self.auto_tighten_enabled or not self.auto_tighten_on_eval_failures:
+            return
+        self.eval_failures_since_tighten += 1
+        if self.eval_failures_since_tighten >= self.auto_tighten_failures_before_tighten:
+            self._auto_tighten_thresholds(reason="eval_failures")
 
     def _run_paper_test(self, model_path: str, test_episodes: int = 5):
         """Run paper-testing mode using a saved PPO model.
 
         This uses the trading environment in inference mode only (no further learning)
         and allows the TradeSimulator/analytics stack to record paper trades.
+        
+        Note: If keep_training_during_paper is True, this method is not called
+        and paper testing happens in parallel with training.
         """
         try:
             print(f"[RL] Starting paper-testing run with model: {model_path}")
+
+            # Mark state as paper-testing so dashboards can clearly display mode
+            state = self.state_manager.get_state()
+            self.state_manager.save_state(
+                episode=state.get("episode", 0),
+                timesteps=state.get("total_timesteps", 0),
+                checkpoint_path=state.get("last_checkpoint") or model_path,
+                best_reward=state.get("best_reward", float("-inf")),
+                total_trades=state.get("total_trades", 0),
+                mode="paper",
+            )
 
             # Create a fresh environment for testing
             self.create_environment()
@@ -591,20 +1374,30 @@ def main():
     
     parser = argparse.ArgumentParser(description="Train RL trading agent")
     parser.add_argument("--symbol", type=str, default=None, help="Trading symbol (default: all RL training symbols)")
-    parser.add_argument("--balance", type=float, default=100000.0, help="Starting balance")
-    parser.add_argument("--timesteps", type=int, default=1000000, help="Total training timesteps")
+    parser.add_argument("--balance", type=float, default=1_000_000.0, help="Starting balance")
+    parser.add_argument(
+        "--timesteps",
+        type=int,
+        default=0,
+        help="Total training timesteps. Use 0 or negative for open‑ended "
+             "training that runs until the accuracy threshold is reached.",
+    )
     parser.add_argument("--max-trades", type=int, default=None, help="Max trades per episode (None=unlimited)")
     parser.add_argument("--model-dir", type=str, default="models/rl_models", help="Model directory")
     parser.add_argument("--monitor", action="store_true", help="Enable simple progress monitor")
     parser.add_argument("--dashboard", action="store_true", help="Enable full RL dashboard")
-    parser.add_argument("--accuracy-threshold", type=float, default=99.0,
-                        help="Global win rate threshold (in percent) to trigger paper-testing mode (default: 99.0)")
+    parser.add_argument("--accuracy-threshold", type=float, default=68.0,
+                        help="Win rate threshold (legacy - now using multi-metric gate with win rate + profit factor + Sharpe + drawdown)")
     parser.add_argument("--min-trades", type=int, default=50,
                         help="Minimum number of closed trades required before applying accuracy threshold (default: 50)")
+    parser.add_argument("--fresh-start", action="store_true",
+                        help="Force fresh start: ignore existing checkpoints and start new training")
     
     args = parser.parse_args()
 
-    symbols = RL_TRAINING_SYMBOLS if not args.symbol else [args.symbol]
+    # If a symbol is provided, train only that market. Otherwise, create one
+    # shared PPO model trained across all RL_TRAINING_SYMBOLS.
+    symbols = [args.symbol] if args.symbol else RL_TRAINING_SYMBOLS
 
     print("\n[RL] =====================================================")
     print("[RL] RL TRAINING MODE - PAPER SIMULATION ONLY (NO REAL MONEY)")
@@ -612,22 +1405,40 @@ def main():
     print("[RL] Logical training timeframes: " + ", ".join(RL_TRAINING_TIMEFRAMES))
     print("[RL] =====================================================\n")
 
-    for sym in symbols:
-        print(f"\n[RL] === Starting training for symbol {sym} ===")
+    # In shared‑model mode (no explicit --symbol), we train one PPO policy
+    # across all symbols using parallel environments. In single‑symbol mode
+    # we still store that symbol’s model in a dedicated subdirectory.
+    if args.symbol:
+        print(f"\n[RL] === Starting training for single symbol {args.symbol} ===")
+        symbol_model_dir = os.path.join(args.model_dir, args.symbol)
         trainer = RLTrainer(
-            symbol=sym,
+            symbol=args.symbol,
             starting_balance=args.balance,
             max_trades=args.max_trades,  # None = unlimited
-            model_dir=args.model_dir
+            model_dir=symbol_model_dir,
+        )
+    else:
+        print(f"\n[RL] === Starting shared-model training for symbols: {', '.join(symbols)} ===")
+        trainer = RLTrainer(
+            symbol=None,
+            starting_balance=args.balance,
+            max_trades=args.max_trades,
+            model_dir=args.model_dir,
         )
 
-        trainer.train(
-            total_timesteps=args.timesteps,
-            use_monitor=args.monitor,
-            use_dashboard=args.dashboard,
-            accuracy_threshold=args.accuracy_threshold,
-            min_trades_for_threshold=args.min_trades,
-        )
+    # Set fresh_start flag if requested
+    if args.fresh_start:
+        trainer._fresh_start = True
+        print("\n[RL] ⚠️  FRESH START MODE: Ignoring existing checkpoints")
+        print("[RL] Starting new training with optimized hyperparameters\n")
+    
+    trainer.train(
+        total_timesteps=args.timesteps,
+        use_monitor=args.monitor,
+        use_dashboard=args.dashboard,
+        accuracy_threshold=args.accuracy_threshold,
+        min_trades_for_threshold=args.min_trades,
+    )
 
 
 if __name__ == "__main__":

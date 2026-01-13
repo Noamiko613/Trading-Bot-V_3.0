@@ -1,0 +1,15 @@
+{
+  "timestamp": "2026-01-04T19:07:42.714836",
+  "balance": 1000000.0,
+  "equity": 1000000.0,
+  "max_equity": 1000000.0,
+  "min_equity": 1000000.0,
+  "max_drawdown_pct": 0.0,
+  "open_trades": [],
+  "closed_trades": [],
+  "health": {
+    "error_streak": 0,
+    "stale_price_cycles": 0,
+    "last_error": null
+  }
+}

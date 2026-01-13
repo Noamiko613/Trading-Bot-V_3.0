@@ -30,12 +30,14 @@ def _format_candle(ohlcv, timeframe_internal: str, mode: str = 'spot') -> Dict:
 
 
 class CoinExDataFetcher:
-    def __init__(self, symbol: str, timeframe_internal: str, max_candles: int = 250, mode: str = 'spot'):
+    def __init__(self, symbol: str, timeframe_internal: str, max_candles: int = 250, mode: str = 'spot', start_date: Optional[str] = None, end_date: Optional[str] = None):
         self.symbol = symbol  # ccxt format e.g. BTC/USDT
         self.timeframe_internal = timeframe_internal
         self.timeframe = INTERNAL_TO_CCXT_TF.get(timeframe_internal, '1m')
         self.max_candles = max_candles
         self.mode = mode
+        self.start_date = start_date
+        self.end_date = end_date
         options = {}
         if (mode or 'spot').lower() == 'futures':
             options = {'options': {'defaultType': 'swap'}}

@@ -15,6 +15,7 @@ import os
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from typing import Optional
+from pathlib import Path
 import json
 
 
@@ -23,7 +24,7 @@ class TradingLogger:
     
     _loggers = {}  # Cache for loggers
     
-    def __init__(self, name: str, log_dir: str = "logs"):
+    def __init__(self, name: str, log_dir: str = None):
         """
         Initialize a logger instance
         
@@ -32,7 +33,12 @@ class TradingLogger:
             log_dir: Directory for log files
         """
         self.name = name
-        self.log_dir = log_dir
+        # Anchor logs to project root so they are consistent regardless of cwd
+        if log_dir is None:
+            project_root = Path(__file__).resolve().parent.parent
+            self.log_dir = str(project_root / "logs")
+        else:
+            self.log_dir = log_dir
         self.logger = self._setup_logger()
     
     def _setup_logger(self) -> logging.Logger:
@@ -314,6 +320,11 @@ class ComponentLogger:
     def simulator_logger():
         """Logger for trade simulator"""
         return TradingLogger("simulator")
+    
+    @staticmethod
+    def algorithmic_logger():
+        """Logger for algorithmic trading system"""
+        return TradingLogger("algorithmic")
 
 
 def get_logger(name: str) -> TradingLogger:

@@ -1,0 +1,42 @@
+{
+  "pairs": [
+    {
+      "symbol": "BTC-USDT",
+      "timeframes": ["5min", "15min", "30min", "1h", "2h", "4h", "6h", "12h"]
+    },
+    {
+      "symbol": "ETH-USDT",
+      "timeframes": ["5min", "15min", "30min", "1h", "2h", "4h", "6h", "12h"]
+    },
+    {
+      "symbol": "SOL-USDT",
+      "timeframes": ["5min", "15min", "30min", "1h", "2h", "4h", "6h", "12h"]
+    },
+    {
+      "symbol": "BNB-USDT",
+      "timeframes": ["5min", "15min", "30min", "1h", "2h", "4h", "6h", "12h"]
+    },
+    {
+      "symbol": "XRP-USDT",
+      "timeframes": ["5min", "15min", "30min", "1h", "2h", "4h", "6h", "12h"]
+    }
+  ],
+  "initial_epsilon": 1.0,
+  "epsilon_min": 0.05,
+  "epsilon_decay": 0.992,
+  "learning_rate": 0.18,
+  "discount_factor": 0.94,
+  "target_precision": 0.97,
+  "precision_window": 250,
+  "max_history": 600,
+  "volatility_window": 30,
+  "reward_scaling": 120.0,
+  "hold_penalty": 0.25,
+  "risk_penalty": 35.0,
+  "status_write_interval": 3,
+  "log_interval": 15,
+  "poll_min_seconds": 20,
+  "poll_max_seconds": 90,
+  "checkpoint_dir": "sim_results/rl_checkpoints"
+}
+

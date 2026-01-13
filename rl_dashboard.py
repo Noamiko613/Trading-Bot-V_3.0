@@ -16,7 +16,7 @@ import sys
 import time
 import json
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 from pathlib import Path
 import numpy as np
@@ -65,6 +65,11 @@ class RLDashboard:
         self.state_file = Path(state_file)
         self.db_path = db_path
         self.update_interval = update_interval
+        try:
+            # Dashboard "stale" threshold in minutes (only when NO open trades)
+            self.stale_threshold_min = int(os.getenv("DASH_STALE_THRESHOLD_MIN", "30"))
+        except Exception:
+            self.stale_threshold_min = 30
         
         # Analytics
         self.analytics = PerformanceAnalytics(db_path=db_path)
@@ -78,6 +83,7 @@ class RLDashboard:
             'episode': 0,
             'timesteps': 0,
             'total_trades': 0,
+            'mode': 'training',
             'rewards': [],
             'episode_rewards': [],
             'losses': [],
@@ -200,41 +206,122 @@ class RLDashboard:
                     self.stats['episode'] = self.state.get('episode', 0)
                     self.stats['timesteps'] = self.state.get('total_timesteps', 0)
                     self.stats['total_trades'] = self.state.get('total_trades', 0)
+                    self.stats['mode'] = self.state.get('mode', 'training')
             except Exception:
                 pass
         
-        # Get trades from database
+        # Get trades from database (both open and closed)
         try:
-            all_trades = self.analytics.get_closed_trades(days=None)
-            
-            if all_trades:
-                # Global metrics
-                metrics = self.analytics.calculate_metrics(all_trades)
-                self.stats['win_rate_global'] = metrics.get('win_rate', 0.0)
-                self.stats['accuracy_global'] = metrics.get('win_rate', 0.0)  # Using win rate as accuracy proxy
-                self.stats['total_pnl'] = metrics.get('total_pnl', 0.0)
-                self.stats['avg_reward'] = metrics.get('avg_pnl', 0.0) / 100  # Scale for reward
+            import sqlite3
+            if os.path.exists(self.db_path):
+                conn = sqlite3.connect(self.db_path)
+                try:
+                    # Get closed trades
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT * FROM trades_closed ORDER BY closed_time DESC")
+                    columns = [desc[0] for desc in cursor.description] if cursor.description else []
+                    closed_trades = []
+                    for row in cursor.fetchall():
+                        closed_trades.append(dict(zip(columns, row)))
+                    
+                    # Get open trades
+                    cursor.execute("SELECT * FROM trades_open")
+                    columns = [desc[0] for desc in cursor.description] if cursor.description else []
+                    open_trades = []
+                    for row in cursor.fetchall():
+                        open_trades.append(dict(zip(columns, row)))
+                    
+                    # Store open trades count for display
+                    self.stats['open_trades_count'] = len(open_trades)
+                    self.stats['open_trades'] = open_trades
+                    
+                    if closed_trades:
+                        # Global metrics from closed trades
+                        metrics = self.analytics.calculate_metrics(closed_trades)
+                        self.stats['win_rate_global'] = metrics.get('win_rate', 0.0)
+                        self.stats['accuracy_global'] = metrics.get('win_rate', 0.0)  # Using win rate as accuracy proxy
+                        self.stats['total_pnl'] = metrics.get('total_pnl', 0.0)
+                        self.stats['avg_reward'] = metrics.get('avg_pnl', 0.0) / 100  # Scale for reward
+                    else:
+                        # If no closed trades yet, initialize with zeros
+                        self.stats['win_rate_global'] = 0.0
+                        self.stats['accuracy_global'] = 0.0
+                        self.stats['total_pnl'] = 0.0
+                        self.stats['avg_reward'] = 0.0
+
+                    # Stale detection: consider ANY trade activity (open or closed)
+                    try:
+                        def _parse_iso(ts: Optional[str]):
+                            if isinstance(ts, str) and ts:
+                                dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                                if dt.tzinfo:
+                                    dt = dt.replace(tzinfo=None)
+                                return dt
+                            return None
+
+                        now = datetime.now(timezone.utc).replace(tzinfo=None)
+                        last_closed_dt = _parse_iso(closed_trades[0].get('closed_time')) if closed_trades else None
+                        open_times = [_parse_iso(t.get('time')) for t in open_trades]
+                        last_open_dt = max([dt for dt in open_times if dt is not None], default=None)
+
+                        last_activity_dt = None
+                        for candidate in (last_closed_dt, last_open_dt):
+                            if candidate and (last_activity_dt is None or candidate > last_activity_dt):
+                                last_activity_dt = candidate
+
+                        if open_trades and last_activity_dt is not None:
+                            # We have open trades; do not flag stale—just report recency
+                            delta_min = max(0, int((now - last_activity_dt).total_seconds() // 60))
+                            self.stats['stale_minutes'] = delta_min
+                            self.stats['is_stale'] = False
+                        elif last_activity_dt is not None:
+                            delta_min = max(0, int((now - last_activity_dt).total_seconds() // 60))
+                            self.stats['stale_minutes'] = delta_min
+                            self.stats['is_stale'] = delta_min >= self.stale_threshold_min
+                        else:
+                            self.stats['stale_minutes'] = None
+                            self.stats['is_stale'] = False
+                    except Exception:
+                        self.stats['stale_minutes'] = None
+                        self.stats['is_stale'] = False
+                    
+                    # Per-pair metrics
+                    pairs = {}
+                    for trade in closed_trades:
+                        symbol = trade.get('symbol', 'UNKNOWN')
+                        if symbol not in pairs:
+                            pairs[symbol] = []
+                        pairs[symbol].append(trade)
+                    
+                    self.stats['accuracy_by_pair'] = {}
+                    self.stats['win_rate_by_pair'] = {}
+                    self.stats['pnl_by_pair'] = {}
+                    
+                    for symbol, trades in pairs.items():
+                        pair_metrics = self.analytics.calculate_metrics(trades)
+                        self.stats['accuracy_by_pair'][symbol] = pair_metrics.get('win_rate', 0.0)
+                        self.stats['win_rate_by_pair'][symbol] = pair_metrics.get('win_rate', 0.0)
+                        self.stats['pnl_by_pair'][symbol] = pair_metrics.get('total_pnl', 0.0)
+                    
+                    # Also count open trades per pair
+                    for trade in open_trades:
+                        symbol = trade.get('symbol', 'UNKNOWN')
+                        if symbol not in self.stats['pnl_by_pair']:
+                            self.stats['pnl_by_pair'][symbol] = 0.0
+                            self.stats['accuracy_by_pair'][symbol] = 0.0
+                            self.stats['win_rate_by_pair'][symbol] = 0.0
                 
-                # Per-pair metrics
-                pairs = {}
-                for trade in all_trades:
-                    symbol = trade.get('symbol', 'UNKNOWN')
-                    if symbol not in pairs:
-                        pairs[symbol] = []
-                    pairs[symbol].append(trade)
-                
-                self.stats['accuracy_by_pair'] = {}
-                self.stats['win_rate_by_pair'] = {}
-                self.stats['pnl_by_pair'] = {}
-                
-                for symbol, trades in pairs.items():
-                    pair_metrics = self.analytics.calculate_metrics(trades)
-                    self.stats['accuracy_by_pair'][symbol] = pair_metrics.get('win_rate', 0.0)
-                    self.stats['win_rate_by_pair'][symbol] = pair_metrics.get('win_rate', 0.0)
-                    self.stats['pnl_by_pair'][symbol] = pair_metrics.get('total_pnl', 0.0)
+                finally:
+                    conn.close()
+            else:
+                # Database doesn't exist yet
+                self.stats['open_trades_count'] = 0
+                self.stats['open_trades'] = []
         
         except Exception as e:
-            pass  # Database might not exist yet
+            # Database might not exist yet or error reading
+            self.stats['open_trades_count'] = 0
+            self.stats['open_trades'] = []
         
         # Update NN info if model available
         if self.model is not None:
@@ -319,8 +406,20 @@ class RLDashboard:
         lines.append(f"{acc_color}Global Accuracy: {acc:.2f}%{Colors.RESET}")
         lines.append(f"Win Rate: {self.stats['win_rate_global']:.2f}%")
         lines.append(f"Total Trades: {self.stats['total_trades']}")
+        open_count = self.stats.get('open_trades_count', 0)
+        if open_count > 0:
+            lines.append(f"{Colors.YELLOW}Open Trades: {open_count}{Colors.RESET}")
         lines.append(f"Total P&L: ${self.stats['total_pnl']:,.2f}")
         lines.append(f"Avg Reward: {self.stats['avg_reward']:.4f}")
+        # Stale status
+        try:
+            stale_min = self.stats.get('stale_minutes')
+            if stale_min is not None:
+                flag = f" {Colors.BRIGHT_RED}[STALE]{Colors.RESET}" if self.stats.get('is_stale') else ""
+                label = "Last Activity" if open_count > 0 else "Last Closed"
+                lines.append(f"{label}: {stale_min}m ago{flag}")
+        except Exception:
+            pass
         lines.append(f"Best Episode: {self.stats['best_episode_reward']:.2f}")
         lines.append(f"Learning Rate: {self.stats['learning_rate']:.6f}")
         lines.append(f"Timesteps: {self.stats['timesteps']:,}")
@@ -336,16 +435,31 @@ class RLDashboard:
                       key=lambda x: x[1], reverse=True)[:8]
         
         if not pairs:
-            lines.append("No trades yet...")
+            # Check if there are open trades even if no closed trades
+            open_trades = self.stats.get('open_trades', [])
+            if open_trades:
+                lines.append(f"{Colors.YELLOW}Open Trades (no closed trades yet):{Colors.RESET}")
+                for trade in open_trades[:5]:  # Show first 5 open trades
+                    symbol = trade.get('symbol', 'UNKNOWN')
+                    side = trade.get('side', '?')
+                    entry = trade.get('entry', 0)
+                    lines.append(f"  {symbol} {side} @ ${entry:.2f}")
+            else:
+                lines.append("No trades yet...")
         else:
             for symbol, accuracy in pairs:
                 win_rate = self.stats['win_rate_by_pair'].get(symbol, 0.0)
                 pnl = self.stats['pnl_by_pair'].get(symbol, 0.0)
                 pnl_color = Colors.BRIGHT_GREEN if pnl >= 0 else Colors.BRIGHT_RED
                 
+                # Count open trades for this symbol
+                open_trades = self.stats.get('open_trades', [])
+                open_count = sum(1 for t in open_trades if t.get('symbol') == symbol)
+                
                 lines.append(f"{symbol}:")
+                status = f" | {Colors.YELLOW}Open: {open_count}{Colors.RESET}" if open_count > 0 else ""
                 lines.append(f"  Acc: {accuracy:.1f}% | WR: {win_rate:.1f}% | "
-                           f"{pnl_color}P&L: ${pnl:,.0f}{Colors.RESET}")
+                           f"{pnl_color}P&L: ${pnl:,.0f}{Colors.RESET}{status}")
         
         return "\n".join(lines)
     
@@ -406,7 +520,7 @@ class RLDashboard:
         lines.append(f"Avg Reward: {self.stats['avg_reward']:.4f}")
         lines.append(f"Learning Rate: {self.stats['learning_rate']:.6f}")
         lines.append(f"Best Reward: {self.stats['best_episode_reward']:.2f}")
-        lines.append(f"Last Update: {datetime.now().strftime('%H:%M:%S')}")
+        lines.append(f"Last Update: {datetime.now(timezone.utc).strftime('%H:%M:%S')}")
         return "\n".join(lines)
     
     def _format_pnl_chart(self) -> str:
@@ -446,7 +560,14 @@ class RLDashboard:
         # Header
         width = min(self.terminal_width, 120)
         print(f"\n{Colors.BOLD}{Colors.CYAN}{'='*width}{Colors.RESET}")
-        print(f"{Colors.BOLD}{Colors.CYAN}RL TRAINING DASHBOARD - Live Monitoring{Colors.RESET}")
+        mode = (self.stats.get('mode') or 'training').lower()
+        if mode == "paper":
+            title = "RL DASHBOARD - PAPER TRADING MONITOR"
+            mode_tag = f"{Colors.BRIGHT_YELLOW}[MODE: PAPER TEST]{Colors.RESET}"
+        else:
+            title = "RL TRAINING DASHBOARD - LIVE LEARNING"
+            mode_tag = f"{Colors.BRIGHT_GREEN}[MODE: TRAINING]{Colors.RESET}"
+        print(f"{Colors.BOLD}{Colors.CYAN}{title}{Colors.RESET} {mode_tag}")
         print(f"{Colors.BOLD}{Colors.CYAN}{'='*width}{Colors.RESET}\n")
         
         # Two column layout
@@ -509,7 +630,10 @@ class RLDashboard:
         if self.update_thread is None or not self.update_thread.is_alive():
             self.update_thread = threading.Thread(target=self._update_loop, daemon=True)
             self.update_thread.start()
-            print("[Dashboard] Started")
+            print(f"[Dashboard] ✅ Started successfully | Update interval: {self.update_interval}s | DB: {self.db_path}")
+            print(f"[Dashboard] 📊 Monitoring state file: {self.state_file}")
+        else:
+            print("[Dashboard] ⚠️ Already running")
     
     def stop(self):
         """Stop dashboard"""

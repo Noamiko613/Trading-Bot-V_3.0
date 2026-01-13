@@ -107,8 +107,47 @@ class BotManager:
             self.global_ledger = GlobalAccountLedger(starting_balance=100000.0)
             self.simulator = TradeSimulator(starting_balance=100000.0, mode=self.mode, symbol=self.symbol, ledger=self.global_ledger)
             # Background simulator thread
-            t = threading.Thread(target=self.simulator.run_forever, kwargs={'poll_seconds': 5.0}, daemon=True)
-            t.start()
+            def _safe_sim_loop():
+                import time as _t
+                backoff = 0.0
+                while True:
+                    try:
+                        self.simulator.step()
+                        backoff = 0.0
+                    except Exception as e:
+                        try:
+                            from utils.logger import ComponentLogger as _CL
+                            _CL.simulator_logger().error("simulator_loop_error", error=str(e))
+                        except Exception:
+                            pass
+                        backoff = 0.5 if backoff <= 0 else min(backoff * 2.0, 5.0)
+                        _t.sleep(backoff)
+                        continue
+                    _t.sleep(5.0)
+            self.sim_thread = threading.Thread(target=_safe_sim_loop, daemon=True)
+            self.sim_thread.start()
+            # Watchdog: restart simulator thread if it dies
+            def _sim_watchdog_loop():
+                import time as _t
+                while True:
+                    try:
+                        if not getattr(self, 'sim_thread', None) or not self.sim_thread.is_alive():
+                            try:
+                                from utils.logger import ComponentLogger as _CL
+                                _CL.simulator_logger().warning("simulator_thread_dead_restart")
+                            except Exception:
+                                pass
+                            # Recreate simulator using same shared ledger
+                            try:
+                                self.simulator = TradeSimulator(starting_balance=100000.0, mode=self.mode, symbol=self.symbol, ledger=self.global_ledger)
+                            except Exception:
+                                pass
+                            self.sim_thread = threading.Thread(target=_safe_sim_loop, daemon=True)
+                            self.sim_thread.start()
+                    except Exception:
+                        pass
+                    _t.sleep(3.0)
+            threading.Thread(target=_sim_watchdog_loop, daemon=True).start()
             # Background global status writer
             def _ledger_status_loop():
                 import time as _t
@@ -293,6 +332,22 @@ class BotManager:
                                         setup['timeframe'] = tf
                                 except Exception:
                                     pass
+                                # Enforce global open-trade cap across all symbols (paper mode)
+                                try:
+                                    cap = int(os.getenv('MAX_GLOBAL_OPEN_TRADES', '20'))
+                                except Exception:
+                                    cap = 20
+                                try:
+                                    open_global = int(self.global_ledger.count_open_trades())
+                                except Exception:
+                                    open_global = 0
+                                if open_global >= cap:
+                                    try:
+                                        from utils.logger import ComponentLogger as _CL
+                                        _CL.simulator_logger().warning("global_open_cap_block", open_global=open_global, cap=cap)
+                                    except Exception:
+                                        pass
+                                    continue
                                 self.simulator.submit_signal(setup)
                         processed_offsets = line_no
             except Exception:
@@ -347,7 +402,8 @@ class BotManager:
                     'symbol': self.symbol,
                     'balance_total_USDT': total_usdt,
                     'balance_free_USDT': free_usdt,
-                    'error': err
+                    'error': err,
+                    'sim_thread_alive': bool(getattr(self, 'sim_thread', None) and self.sim_thread.is_alive())
                 }
                 try:
                     with open(path, 'w') as f:

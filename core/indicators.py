@@ -34,7 +34,7 @@ def add_vwap(df: pd.DataFrame, col_name: str = "vwap") -> pd.DataFrame:
     vol = df["volume"].astype(float)
     cum_vol = vol.cumsum().replace(0, np.nan)
     cum_pv = (price * vol).cumsum()
-    df[col_name] = (cum_pv / cum_vol).fillna(method="bfill").fillna(method="ffill")
+    df[col_name] = (cum_pv / cum_vol).bfill().ffill()
     return df
 
 

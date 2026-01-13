@@ -1,0 +1,64 @@
+{
+  "acceptance_criteria": {
+    "win_rate_threshold": 70.0,
+    "profit_factor_threshold": 1.5,
+    "sharpe_threshold": 1.5,
+    "max_drawdown_threshold": 12.0,
+    "min_trades_per_window": 500,
+    "stability_windows_required": 3,
+    "window_size_trades": 500,
+    "description": "Multi-metric gate: All metrics must pass across N consecutive windows. Conservative defaults to prevent overfitting."
+  },
+  "experience_buffer": {
+    "good_buffer_size": 10000,
+    "bad_buffer_size": 10000,
+    "good_percentile": 0.75,
+    "bad_percentile": 0.25,
+    "sampling_ratios": {
+      "on_policy_ppo": 0.75,
+      "bc_from_good": 0.15,
+      "negative_correction": 0.10
+    },
+    "description": "Fixed capacities: 10k transitions each (top/bottom 25% episodes). Sampling: 75% PPO, 15% BC, 10% negative correction."
+  },
+  "normalization": {
+    "reward_clip_range": [-1.0, 1.0],
+    "use_running_mean_std": true,
+    "observation_normalization": true,
+    "description": "Rewards clipped to [-1, 1]. Running mean/std normalization for rewards and observations to stabilize learning."
+  },
+  "action_space": {
+    "use_continuous_actions": false,
+    "discrete_actions": ["hold", "buy", "sell"],
+    "position_sizing_layer": {
+      "enabled": false,
+      "max_position_fraction": 0.5,
+      "description": "Currently using discrete actions. Continuous position sizing can be enabled for better risk control."
+    }
+  },
+  "paper_testing": {
+    "keep_training_during_paper": true,
+    "auto_rollback_enabled": true,
+    "rollback_threshold_drawdown": 15.0,
+    "rollback_threshold_sharpe": 0.5,
+    "paper_test_episodes": 20,
+    "description": "Training continues during paper testing to allow rollback. Auto-rollback triggers if metrics degrade. paper_test_episodes controls paper validation length."
+  },
+  "training_loop": {
+    "min_timesteps_before_eval": 250000,
+    "description": "Delay multi-metric evaluation until sufficient experience is collected to reduce early overfitting/false positives."
+  },
+  "auto_tighten": {
+    "enabled": true,
+    "on_rollback": true,
+    "on_eval_failures": true,
+    "failures_before_tighten": 3,
+    "max_steps": 5,
+    "win_rate_increment": 1.0,
+    "profit_factor_increment": 0.05,
+    "sharpe_increment": 0.1,
+    "drawdown_decrement": 0.5,
+    "description": "If repeated eval failures or rollbacks occur, automatically tighten gates (higher WR/PF/Sharpe, lower DD) and resume training."
+  }
+}
+

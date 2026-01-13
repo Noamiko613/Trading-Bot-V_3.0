@@ -2,6 +2,7 @@ import os
 import sqlite3
 import json
 from datetime import datetime
+from pathlib import Path
 from typing import Dict
 from utils.logger import ComponentLogger
 
@@ -25,7 +26,12 @@ class GlobalAccountLedger:
     def __init__(self, db_path: str = None, starting_balance: float = 100000.0):
         if hasattr(self, '_initialized') and self._initialized:
             return
-        self.db_path = db_path or os.path.join('sim_results', 'global_account.db')
+        # Anchor ledger DB to project root to avoid cwd drift
+        if db_path is None:
+            project_root = Path(__file__).resolve().parent
+            self.db_path = project_root / 'sim_results' / 'global_account.db'
+        else:
+            self.db_path = Path(db_path)
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._init_db(starting_balance)
         self._initialized = True

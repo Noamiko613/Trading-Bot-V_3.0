@@ -109,12 +109,23 @@ class PerformanceAnalytics:
         gross_loss = abs(df[df['pnl'] < 0]['pnl'].sum()) if losing_trades > 0 else 0
         profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else 0
         
-        # Drawdown analysis
+        # Drawdown analysis - use equity curve approach for more accurate calculation
+        starting_equity = 100000.0  # Default starting balance (can be made configurable)
         cumulative_pnl = df['pnl'].cumsum()
-        running_max = cumulative_pnl.cummax()
-        drawdown = running_max - cumulative_pnl
+        equity_curve = starting_equity + cumulative_pnl
+        
+        # Calculate drawdown from equity curve
+        running_max = equity_curve.cummax()
+        drawdown = running_max - equity_curve
         max_drawdown = drawdown.max()
-        max_drawdown_pct = (max_drawdown / running_max.max() * 100) if running_max.max() > 0 else 0
+        # Drawdown as percentage of peak equity
+        max_drawdown_pct = (max_drawdown / running_max.max() * 100) if running_max.max() > 0 else 0.0
+        
+        # Ensure we return a valid number (not NaN or inf)
+        if not np.isfinite(max_drawdown_pct):
+            max_drawdown_pct = 0.0
+        if not np.isfinite(max_drawdown):
+            max_drawdown = 0.0
         
         # Sharpe ratio (assuming 252 trading days per year for crypto)
         if len(df) > 1:
