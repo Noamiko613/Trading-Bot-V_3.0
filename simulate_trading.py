@@ -25,6 +25,7 @@ class TradeSimulator:
         kill_switch_enabled: bool = True,
         max_trade_duration_hours: float = None,
         stale_check_interval_sec: int = None,
+        is_historical_training: bool = False,
     ):
         self.starting_balance = starting_balance
         # Anchor all persistence to project root to avoid cwd drift
@@ -41,6 +42,7 @@ class TradeSimulator:
         self.mode = mode
         self.symbol = symbol
         self.current_step = 0
+        self.is_historical_training = is_historical_training  # Flag for historical training mode
         # Trading costs
         self.fee_pct = fee_pct  # 0.04% taker fee
         self.slippage_pct = slippage_pct  # 0.05% slippage
@@ -449,10 +451,15 @@ class TradeSimulator:
         actual_rr = (actual_reward / actual_risk) if actual_risk > 0 else float(setup.get('rr', 2.0))
         rr_text = f"{actual_rr:.2f}|1"
         
+        # Mark pattern for historical training trades
+        pattern = setup.get('name', setup.get('pattern', 'Unknown'))
+        if self.is_historical_training:
+            pattern = f"HISTORICAL_TRAINING_{pattern}"
+        
         trade = {
             'id': f"{datetime.utcnow().timestamp():.0f}-{len(self.open_trades)+len(self.closed_trades)}",
             'time': datetime.utcnow().isoformat(),
-            'pattern': setup.get('name', 'Unknown'),  # Pattern that triggered the trade
+            'pattern': pattern,  # Pattern that triggered the trade (marked if historical)
             'side': side,
             'symbol': self.symbol,  # ensure symbol is carried through lifecycle
             'entry': round(entry_with_slippage, 8),  # FIXED: Format prices properly, avoid scientific notation
@@ -469,7 +476,8 @@ class TradeSimulator:
             'init_stop': round(stop, 8),
             'r_per_unit': round(risk_per_unit, 12),
             'session_allowed': setup.get('session_cause'),  # Session that allowed this trade
-            'timeframe': setup.get('timeframe')
+            'timeframe': setup.get('timeframe'),
+            'is_historical_training': self.is_historical_training  # Flag for filtering
         }
         self.open_trades.append(trade)
         # Log trade open (non-intrusive)

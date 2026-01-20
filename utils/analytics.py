@@ -37,8 +37,14 @@ class PerformanceAnalytics:
         self.analytics_dir = "analytics"
         os.makedirs(self.analytics_dir, exist_ok=True)
     
-    def get_closed_trades(self, symbol: Optional[str] = None, days: Optional[int] = None) -> List[Dict]:
-        """Get closed trades from database"""
+    def get_closed_trades(self, symbol: Optional[str] = None, days: Optional[int] = None, exclude_historical_training: bool = True) -> List[Dict]:
+        """Get closed trades from database
+        
+        Args:
+            symbol: Filter by symbol (optional)
+            days: Filter by days (optional)
+            exclude_historical_training: Exclude historical training trades (default: True)
+        """
         if not os.path.exists(self.db_path):
             return []
         
@@ -56,6 +62,10 @@ class PerformanceAnalytics:
                 start_date = (datetime.now() - timedelta(days=days)).isoformat()
                 conditions.append("closed_time >= ?")
                 params.append(start_date)
+            
+            # Exclude historical training trades by default
+            if exclude_historical_training:
+                conditions.append("pattern NOT LIKE 'HISTORICAL_TRAINING_%'")
             
             if conditions:
                 query += " WHERE " + " AND ".join(conditions)

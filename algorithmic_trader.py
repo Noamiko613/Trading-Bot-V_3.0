@@ -70,7 +70,7 @@ class PairMonitor:
             self.probation_min_win_rate = 60.0  # Minimum win rate during probation
             self.probation_min_rr = 1.8  # Minimum R:R during probation
         
-        # Statistics
+        # Statistics - initialize with defaults
         self.stats = {
             'algorithms_tested': 0,
             'algorithms_validated': 0,
@@ -86,6 +86,9 @@ class PairMonitor:
         
         # Load existing validated algorithms
         self._load_validated_algorithms()
+        
+        # Load saved statistics from previous runs
+        self._load_statistics()
     
     def _load_validated_algorithms(self):
         """Load previously validated algorithms"""
@@ -101,6 +104,39 @@ class PairMonitor:
         
         self.stats['algorithms_active'] = len(self.active_algorithms)
         self.logger.info("algorithms_loaded", symbol=self.symbol, count=len(self.active_algorithms))
+    
+    def _load_statistics(self):
+        """Load saved statistics from previous runs"""
+        try:
+            # Use consistent symbol normalization
+            safe_symbol = self.symbol.replace('/', '_').replace('-', '_').upper()
+            algo_dir = Path(__file__).resolve().parent / "algorithmic_trading" / safe_symbol
+            status_path = algo_dir / "algorithm_status.json"
+            
+            if status_path.exists():
+                with open(status_path, 'r') as f:
+                    status = json.load(f)
+                    
+                # Load statistics from saved status
+                saved_stats = status.get('statistics', {}).get('system_stats', {})
+                if saved_stats:
+                    # Restore cumulative stats (tested, validated counts)
+                    self.stats['algorithms_tested'] = saved_stats.get('algorithms_tested', 0)
+                    self.stats['algorithms_validated'] = saved_stats.get('algorithms_validated', 0)
+                    # Note: algorithms_active is set from loaded algorithms, not from stats
+                    self.stats['last_discovery'] = saved_stats.get('last_discovery')
+                    self.stats['last_market_update'] = saved_stats.get('last_market_update')
+                    self.stats['market_data_points'] = saved_stats.get('market_data_points', 0)
+                    
+                    self.logger.info(
+                        "statistics_loaded",
+                        symbol=self.symbol,
+                        algorithms_tested=self.stats['algorithms_tested'],
+                        algorithms_validated=self.stats['algorithms_validated'],
+                    )
+        except Exception as e:
+            # If loading fails, continue with default stats (0)
+            self.logger.error("statistics_load_error", symbol=self.symbol, error=str(e))
     
     def _create_algorithm_from_data(self, algo_data: Dict) -> Optional[AlgorithmTemplate]:
         """Recreate algorithm instance from saved data"""
@@ -147,6 +183,9 @@ class PairMonitor:
             self.stats['algorithms_tested'] += 1
             self.stats['last_discovery'] = datetime.utcnow().isoformat()
             
+            # Save stats immediately after testing
+            self.write_status()
+            
             if evaluation.get('valid') and evaluation.get('meets_criteria'):
                 # Save algorithm (but mark as probationary)
                 self.discovery.save_algorithm(algorithm, evaluation)
@@ -169,6 +208,9 @@ class PairMonitor:
                 }
                 
                 self.stats['algorithms_validated'] += 1
+                
+                # Save stats immediately after validation
+                self.write_status()
                 
                 self.logger.info(
                     "algorithm_on_probation",
@@ -363,6 +405,9 @@ class PairMonitor:
                         del self.probationary_algorithms[algo_id]
                         
                         self.stats['algorithms_active'] = len(self.active_algorithms)
+                        
+                        # Save stats after promotion
+                        self.write_status()
                         
                         self.logger.info(
                             "algorithm_promoted",

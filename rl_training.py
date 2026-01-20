@@ -34,6 +34,7 @@ if script_dir not in sys.path:
 import numpy as np
 import pandas as pd
 pd.set_option('future.no_silent_downcasting', True)
+from datetime import datetime
 
 # Try to import torch - handle DLL errors on Windows
 try:
@@ -77,6 +78,7 @@ from rl_experience_buffer import PrioritizedExperienceBuffer
 from rl_behavior_cloning import BehaviorCloningTrainer
 from rl_metrics_evaluator import MultiMetricEvaluator
 from utils.analytics import PerformanceAnalytics
+from historical_data_replay import HistoricalDataReplay
 
 
 RL_TRAINING_SYMBOLS = [
@@ -135,6 +137,7 @@ class TrainingState:
             'best_reward': float('-inf'),
             'total_trades': 0,
             'mode': 'training',
+            'historical_pretraining_completed': False,
         }
     
     def save_state(
@@ -147,7 +150,8 @@ class TrainingState:
         mode: str = "training",
     ):
         """Save training state"""
-        self.state = {
+        # Preserve existing state fields (like historical_pretraining_completed)
+        self.state.update({
             'episode': episode,
             'total_timesteps': timesteps,
             'last_checkpoint': checkpoint_path,
@@ -155,7 +159,7 @@ class TrainingState:
             'total_trades': total_trades,
             'mode': mode,
             'timestamp': datetime.now().isoformat(),
-        }
+        })
         try:
             with open(self.state_file, 'w') as f:
                 json.dump(self.state, f, indent=2)
@@ -354,6 +358,42 @@ class RLTrainer:
         self.is_paused = False
         self.shutdown_event = threading.Event()  # Flag for graceful shutdown
         
+        # Historical pre-training configuration
+        # Note: CoinEx typically only has data from ~2020-2021 onwards
+        # For crypto bear/bull markets, we want:
+        # - 2020-2021: Bull market start
+        # - 2022: Bear market/crash
+        # - 2023: Recovery
+        # - 2024: Bull market
+        # Adjust date range based on what's actually available
+        from datetime import datetime
+        today = datetime.now()
+        self.historical_start_date = os.getenv('HISTORICAL_START_DATE', '2020-01-01')
+        end_date_env = os.getenv('HISTORICAL_END_DATE', None)
+        if end_date_env is None:
+            # Default to today (don't request future dates)
+            self.historical_end_date = today.strftime('%Y-%m-%d')
+        else:
+            # Validate end date isn't in the future
+            try:
+                end_dt = datetime.fromisoformat(end_date_env.replace('Z', '+00:00'))
+                if end_dt > today:
+                    print(f"[RL] Warning: End date {end_date_env} is in the future. Using today's date instead.")
+                    self.historical_end_date = today.strftime('%Y-%m-%d')
+                else:
+                    self.historical_end_date = end_date_env
+            except:
+                self.historical_end_date = today.strftime('%Y-%m-%d')
+        self.use_historical_pretraining = os.getenv('USE_HISTORICAL_PRETRAINING', '1') == '1'
+        # Historical pre-training timesteps: 
+        # - Default: 500,000 (good baseline for ~2-4 years of data)
+        # - Recommended range: 300,000 - 1,000,000
+        # - 850,000 is fine (not too much) - gives model more exposure to historical patterns
+        # - Too many (>2M): May overfit to past conditions, takes too long
+        # - Too few (<200K): Model won't learn enough from historical data
+        self.historical_pretrain_timesteps = int(os.getenv('HISTORICAL_PRETRAIN_TIMESTEPS', '500000'))
+        self.historical_replay = None
+        
         # Progress monitor
         self.progress_monitor = None
         self.monitor_thread = None
@@ -479,7 +519,7 @@ class RLTrainer:
         # Return conservative defaults
         return {
             "acceptance_criteria": {
-                "win_rate_threshold": 68.0,
+                "win_rate_threshold": 85.0,
                 "profit_factor_threshold": 1.3,
                 "sharpe_threshold": 1.0,
                 "max_drawdown_threshold": 12.0,
@@ -620,18 +660,33 @@ class RLTrainer:
         keyboard_thread = threading.Thread(target=keyboard_listener, daemon=True)
         keyboard_thread.start()
     
-    def create_environment(self):
+    def create_environment(self, historical_replay=None):
         """Create trading environment.
 
         If self.symbol is set, a single-symbol environment is created.
         If self.symbol is None, we build one environment per symbol in
         RL_TRAINING_SYMBOLS and train a single shared PPO policy across
         all of them (multi-market learning).
+        
+        Args:
+            historical_replay: Optional HistoricalDataReplay instance for offline pre-training
         """
         symbols = [self.symbol] if self.symbol else RL_TRAINING_SYMBOLS
 
         def make_env(idx: int, sym: str):
             def _thunk():
+                # Create historical replay for this symbol if in historical mode
+                symbol_replay = None
+                if historical_replay is not None:
+                    # Check if we have a replay map for multi-symbol training
+                    replay_map = getattr(self, '_historical_replay_map', None)
+                    if replay_map and sym in replay_map:
+                        # Use symbol-specific replay
+                        symbol_replay = replay_map[sym]
+                    else:
+                        # Fallback to single replay (backward compatibility)
+                        symbol_replay = historical_replay
+                
                 env = TradingEnv(
                     symbol=sym,
                     starting_balance=self.starting_balance,
@@ -642,6 +697,7 @@ class RLTrainer:
                     use_continuous_actions=False,  # Keep discrete for now (can enable later)
                     domain_randomization=True,  # Enable domain randomization
                     kill_switch_enabled=False,  # Allow exploration; drawdown still penalized via reward
+                    historical_replay=symbol_replay,  # Pass historical replay if available
                 )
                 # Wrap with Monitor for stats
                 monitor_path = self.model_dir / f"training_monitor_{sym}.csv"
@@ -721,9 +777,16 @@ class RLTrainer:
             if not checkpoint_path:
                 checkpoints_dir = self.model_dir / "checkpoints"
                 if checkpoints_dir.exists():
-                    checkpoints = sorted(checkpoints_dir.glob("rl_model_*.zip"))
-                    if checkpoints:
-                        checkpoint_path = str(checkpoints[-1])  # Use latest checkpoint
+                    # Check for both historical and regular checkpoints
+                    all_checkpoints = sorted(checkpoints_dir.glob("rl_model_*.zip"))
+                    historical_checkpoints = sorted(checkpoints_dir.glob("rl_model_historical_*.zip"))
+                    
+                    # Prefer historical checkpoints if we're in historical mode, otherwise use any
+                    if historical_checkpoints:
+                        checkpoint_path = str(historical_checkpoints[-1])
+                        print(f"[RL] Found latest historical checkpoint: {checkpoint_path}")
+                    elif all_checkpoints:
+                        checkpoint_path = str(all_checkpoints[-1])
                         print(f"[RL] Found latest checkpoint: {checkpoint_path}")
             
             # Try to load the checkpoint
@@ -889,19 +952,87 @@ class RLTrainer:
         total_timesteps: int = 0,
         use_monitor: bool = False,
         use_dashboard: bool = False,
-        accuracy_threshold: float = 68.0,  # Legacy parameter (now using multi-metric gate)
+        accuracy_threshold: float = 85.0,  # Legacy parameter (now using multi-metric gate)
         min_trades_for_threshold: int = 500,  # Minimum trades per evaluation window
     ):
-        """Train the RL agent.
-
+        """Train the RL agent with two-phase approach:
+        
+        Phase 1: Pre-train on historical data (2019-2024) to build robust baseline
+        Phase 2: Fine-tune on live paper trading for adaptation to current conditions
+        
         If total_timesteps is <= 0, the trainer will run in an open‑ended
         loop and continue improving until the multi-metric gate is passed
         (win rate + profit factor + Sharpe + drawdown across 3 consecutive
         stability windows). This still fully supports pause/resume via the
         TrainingState and Ctrl+C handler.
         """
-        # Create environment FIRST (required before loading model)
-        self.create_environment()
+        # Phase 1: Historical pre-training (if enabled)
+        if self.use_historical_pretraining:
+            print("\n" + "="*80)
+            print("PHASE 1: HISTORICAL PRE-TRAINING")
+            print("="*80)
+            print(f"Training on historical data: {self.historical_start_date} to {self.historical_end_date}")
+            print(f"Target timesteps: {self.historical_pretrain_timesteps:,}")
+            print("="*80 + "\n")
+            
+            # Check if historical pre-training already completed
+            state = self.state_manager.get_state()
+            historical_completed = state.get('historical_pretraining_completed', False)
+            
+            if not historical_completed:
+                # Run historical training phase - returns True if completed, False if interrupted
+                historical_finished = self._train_historical_phase()
+                
+                # Check if shutdown was requested during historical training
+                if self.shutdown_event.is_set():
+                    print("\n[RL] ⚠️ Shutdown requested during historical pre-training.")
+                    print("[RL] Exiting. Historical pre-training was NOT completed.")
+                    print("[RL] Resume training later to continue historical pre-training.")
+                    # Save state but DON'T mark as completed
+                    state = self.state_manager.get_state()
+                    self.state_manager.save_state(
+                        episode=state.get('episode', 0),
+                        timesteps=state.get('total_timesteps', 0),
+                        checkpoint_path=state.get('last_checkpoint'),
+                        best_reward=state.get('best_reward', float('-inf')),
+                        total_trades=state.get('total_trades', 0),
+                        mode=state.get('mode', 'training'),
+                    )
+                    return  # Exit - don't proceed to Phase 2
+                
+                # If historical training was interrupted (didn't finish), exit
+                if not historical_finished:
+                    print("\n[RL] ⚠️ Historical pre-training was interrupted.")
+                    print("[RL] Exiting. Resume training later to continue.")
+                    return  # Exit - don't proceed to Phase 2
+                
+                # Mark historical pre-training as completed (only if it actually finished)
+                state = self.state_manager.get_state()
+                # Update state with completion flag
+                state['historical_pretraining_completed'] = True
+                # Save updated state
+                self.state_manager.save_state(
+                    episode=state.get('episode', 0),
+                    timesteps=state.get('total_timesteps', 0),
+                    checkpoint_path=state.get('last_checkpoint'),
+                    best_reward=state.get('best_reward', float('-inf')),
+                    total_trades=state.get('total_trades', 0),
+                    mode=state.get('mode', 'training'),
+                )
+                # Also update the state dict directly for immediate access
+                self.state_manager.state['historical_pretraining_completed'] = True
+            else:
+                print("[RL] Historical pre-training already completed. Skipping to live fine-tuning.")
+        
+        # Phase 2: Live paper trading fine-tuning
+        print("\n" + "="*80)
+        print("PHASE 2: LIVE PAPER TRADING FINE-TUNING")
+        print("="*80)
+        print("Fine-tuning on live market data for adaptation to current conditions")
+        print("="*80 + "\n")
+        
+        # Create environment for live training (no historical replay)
+        self.create_environment(historical_replay=None)
         
         # Create or load model (skip checkpoint if fresh_start is True)
         load_checkpoint = not getattr(self, '_fresh_start', False)
@@ -980,12 +1111,33 @@ class RLTrainer:
         episode = 0
         best_reward = state.get('best_reward', float('-inf'))
         
+        # CRITICAL FIX: Save initial state BEFORE training starts
+        # This ensures we can detect if training loop crashes immediately
+        print(f"[RL] Saving initial state (before training starts)...")
+        try:
+            self.state_manager.save_state(
+                episode=episode,
+                timesteps=current_timesteps,
+                checkpoint_path=state.get('last_checkpoint'),
+                best_reward=best_reward,
+                total_trades=state.get('total_trades', 0),
+                mode=self.current_mode,
+            )
+            print(f"[RL] ✅ Initial state saved (episode={episode}, timesteps={current_timesteps:,})")
+        except Exception as e:
+            print(f"[RL] ⚠️ Warning: Could not save initial state: {e}")
+        
         try:
             # Train in chunks to allow for pause/resume. In open‑ended mode
             # we simply keep stepping forward in fixed chunks until the
             # accuracy threshold logic stops us.
             default_chunk = 50_000
             chunk_size = default_chunk if infinite_mode else min(remaining_timesteps, default_chunk)
+            
+            # Track last state save time for heartbeat
+            import time
+            last_state_save = time.time()
+            state_save_interval = 300  # Save state every 5 minutes as heartbeat
             
             while infinite_mode or remaining_timesteps > 0:
                 # Check for graceful shutdown
@@ -1018,19 +1170,48 @@ class RLTrainer:
                 self.model.learning_rate = max(self.min_lr, adaptive_lr)
                 
                 # Train for a chunk
-                self.model.learn(
-                    total_timesteps=chunk_size,
-                    callback=callbacks,
-                    reset_num_timesteps=False,
-                    tb_log_name="PPO"
-                )
-                
-                # Log adaptive parameters
-                if episode % 10 == 0:
-                    print(f"[RL] Adaptive parameters: LR={self.model.learning_rate:.6f}, Entropy={self.model.ent_coef:.4f}, Progress={progress*100:.1f}%")
-                
-                # Update state
-                current_timesteps += chunk_size
+                try:
+                    print(f"[RL] Starting training chunk: {chunk_size} timesteps (Episode {episode}, Total: {current_timesteps:,})")
+                    
+                    # CRITICAL FIX: Set timeout/checkpoints during model.learn() to prevent infinite hangs
+                    # If model.learn() hangs, we need to detect it
+                    chunk_start_time = time.time()
+                    
+                    self.model.learn(
+                        total_timesteps=chunk_size,
+                        callback=callbacks,
+                        reset_num_timesteps=False,
+                        tb_log_name="PPO"
+                    )
+                    
+                    chunk_duration = time.time() - chunk_start_time
+                    print(f"[RL] Training chunk took {chunk_duration:.1f} seconds ({chunk_duration/60:.1f} minutes)")
+                    
+                    # Log adaptive parameters
+                    if episode % 10 == 0:
+                        print(f"[RL] Adaptive parameters: LR={self.model.learning_rate:.6f}, Entropy={self.model.ent_coef:.4f}, Progress={progress*100:.1f}%")
+                    
+                    # Update state AFTER successful training
+                    current_timesteps += chunk_size
+                    print(f"[RL] ✅ Training chunk completed. New total: {current_timesteps:,} timesteps")
+                    
+                    # Update heartbeat timestamp
+                    last_state_save = time.time()
+                except Exception as e:
+                    print(f"[RL] ❌ ERROR during training: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    # Save state even on error so we can diagnose
+                    self.state_manager.save_state(
+                        episode=episode,
+                        timesteps=current_timesteps,
+                        checkpoint_path=str(self.model_dir / "checkpoints" / f"rl_model_{current_timesteps}_steps.zip"),
+                        best_reward=best_reward,
+                        total_trades=state.get('total_trades', 0),
+                        mode=self.current_mode,
+                    )
+                    # Re-raise to stop training (user can fix issue and resume)
+                    raise
                 if not infinite_mode:
                     remaining_timesteps -= chunk_size
                 episode += 1
@@ -1045,7 +1226,7 @@ class RLTrainer:
                 else:
                     total_trades = state.get('total_trades', 0)
                 
-                # Save state
+                # Save state (CRITICAL: Save after each chunk to prevent data loss on crash)
                 checkpoint_path = str(self.model_dir / "checkpoints" / f"rl_model_{current_timesteps}_steps.zip")
                 if not os.path.exists(checkpoint_path):
                     # Use latest checkpoint
@@ -1057,14 +1238,36 @@ class RLTrainer:
                 
                 # Persist state with the current mode (training or paper) so dashboards/status
                 # reflect what the loop is actually doing.
-                self.state_manager.save_state(
-                    episode=episode,
-                    timesteps=current_timesteps,
-                    checkpoint_path=checkpoint_path,
-                    best_reward=best_reward,
-                    total_trades=total_trades,
-                    mode=self.current_mode,
-                )
+                try:
+                    self.state_manager.save_state(
+                        episode=episode,
+                        timesteps=current_timesteps,
+                        checkpoint_path=checkpoint_path,
+                        best_reward=best_reward,
+                        total_trades=total_trades,
+                        mode=self.current_mode,
+                    )
+                    print(f"[RL] 💾 State saved: Episode {episode}, Timesteps {current_timesteps:,}, Trades {total_trades}")
+                    last_state_save = time.time()  # Update heartbeat
+                except Exception as e:
+                    print(f"[RL] ⚠️ Warning: Failed to save state: {e}")
+                
+                # HEARTBEAT: Periodically save state even if no training chunk completed
+                # This helps detect if training loop is alive but stuck
+                if time.time() - last_state_save > state_save_interval:
+                    try:
+                        print(f"[RL] 💓 Heartbeat: Saving state (no training chunk in {state_save_interval//60} minutes)")
+                        self.state_manager.save_state(
+                            episode=episode,
+                            timesteps=current_timesteps,
+                            checkpoint_path=checkpoint_path,
+                            best_reward=best_reward,
+                            total_trades=total_trades,
+                            mode=self.current_mode,
+                        )
+                        last_state_save = time.time()
+                    except Exception as e:
+                        print(f"[RL] ⚠️ Warning: Failed heartbeat save: {e}")
                 
                 # Update progress monitor
                 if self.progress_monitor:
@@ -1106,8 +1309,8 @@ class RLTrainer:
                 # Multi-metric evaluation with stability windows (skip early to reduce overfitting)
                 try:
                     if current_timesteps >= self.min_timesteps_before_eval:
-                        # Get all closed trades from database (no symbol filter, no time filter)
-                        trades = self.analytics.get_closed_trades(symbol=None, days=None)
+                        # Get all closed trades from database (exclude historical training trades)
+                        trades = self.analytics.get_closed_trades(symbol=None, days=None, exclude_historical_training=True)
                         
                         # Debug: Print trade count for troubleshooting
                         if len(trades) == 0:
@@ -1229,6 +1432,382 @@ class RLTrainer:
             self._save_final_state(episode, current_timesteps, best_reward, total_trades)
         
         print("\n[RL] Training completed!")
+    
+    def _find_oldest_available_date(self, test_symbol: str) -> Optional[str]:
+        """Find the oldest available historical data date.
+        
+        User confirmed CoinEx has data from 2019-12, so we start there.
+        Will not go earlier than 2017-01-01 (minimum limit).
+        """
+        from datetime import datetime, timezone
+        from verify_patterns import normalize_symbol_to_ccxt
+        from coinEx_getting_data import CoinExDataFetcher
+        
+        print(f"[RL] Finding oldest available data for {test_symbol}...")
+        print(f"[RL] Starting from 2019-12-01 (CoinEx confirmed start date)")
+        print(f"[RL] Minimum date limit: 2017-01-01 (will not search earlier)")
+        
+        symbol_ccxt = normalize_symbol_to_ccxt(test_symbol)
+        
+        # Start from 2019-12-01 (user confirmed CoinEx has data from 2019-12)
+        # Fetch full range to find actual oldest date in the data
+        try:
+            fetcher = CoinExDataFetcher(
+                symbol=symbol_ccxt,
+                timeframe_internal="1h",
+                max_candles=100000,  # Large enough for full historical range
+                mode='spot',
+            )
+            
+            print(f"[RL] Fetching full historical range from 2019-12-01 to {self.historical_end_date}...")
+            print(f"[RL] This may take a few minutes...")
+            
+            candles = fetcher.fetch_historical_range("2019-12-01", self.historical_end_date)
+            
+            if candles and len(candles) > 10:
+                import pandas as pd
+                df = pd.DataFrame(candles)
+                if not df.empty and 'timestamp' in df.columns:
+                    df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True, errors='coerce')
+                    df = df.dropna(subset=['timestamp']).sort_values('timestamp')
+                    first_date = df['timestamp'].min()
+                    last_date = df['timestamp'].max()
+                    first_date_str = first_date.strftime('%Y-%m-%d')
+                    last_date_str = last_date.strftime('%Y-%m-%d')
+                    
+                    print(f"[RL] ✅ Found {len(candles)} candles")
+                    print(f"[RL] Date range: {first_date_str} to {last_date_str}")
+                    
+                    # Verify it's actually old data (not recent)
+                    now = datetime.now(timezone.utc)  # Make timezone-aware
+                    if isinstance(first_date, pd.Timestamp):
+                        first_dt = first_date.to_pydatetime()
+                        # Ensure timezone-aware
+                        if first_dt.tzinfo is None:
+                            first_dt = first_dt.replace(tzinfo=timezone.utc)
+                    elif isinstance(first_date, datetime):
+                        first_dt = first_date
+                        if first_dt.tzinfo is None:
+                            first_dt = first_dt.replace(tzinfo=timezone.utc)
+                    else:
+                        first_dt = pd.Timestamp(first_date).to_pydatetime()
+                        if first_dt.tzinfo is None:
+                            first_dt = first_dt.replace(tzinfo=timezone.utc)
+                    days_ago = (now - first_dt).days
+                    
+                    if days_ago > 365:  # At least 1 year old
+                        print(f"[RL] ✅ Verified: Data is {days_ago} days old (historical data)")
+                        return first_date_str
+                    else:
+                        print(f"[RL] ⚠️ Warning: Data appears recent ({days_ago} days old), may not be historical")
+                        # Still return it, but warn
+                        return first_date_str
+            else:
+                print(f"[RL] ⚠️ No data found from 2019-12-01")
+        except Exception as e:
+            print(f"[RL] Error fetching from 2019-12-01: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        # Fallback: return 2019-12-01 (user confirmed it exists)
+        print(f"[RL] Using 2019-12-01 as start date (CoinEx confirmed start)")
+        return "2019-12-01"
+    
+    def _train_historical_phase(self) -> bool:
+        """
+        Phase 1: Pre-train on historical data.
+        
+        Returns:
+            bool: True if historical training completed successfully, False if interrupted
+        """
+        try:
+            # Determine symbols to train on
+            symbols = [self.symbol] if self.symbol else RL_TRAINING_SYMBOLS
+            
+            print(f"[RL] Historical pre-training on {len(symbols)} symbols: {', '.join(symbols)}")
+            
+            # Try to find oldest available data by testing different start dates
+            # Start from requested date and work backwards to find what's actually available
+            print(f"[RL] Finding oldest available historical data...")
+            oldest_available_date = self._find_oldest_available_date(symbols[0])
+            
+            if oldest_available_date:
+                print(f"[RL] ✅ Oldest available data found: {oldest_available_date}")
+                # Use the oldest available date instead of requested date
+                effective_start_date = oldest_available_date
+            else:
+                print(f"[RL] ⚠️  Could not determine oldest date, using requested: {self.historical_start_date}")
+                effective_start_date = self.historical_start_date
+            
+            # Prioritize timeframes: shorter timeframes = more samples
+            # Try shorter timeframes first (they give more data points)
+            # Order: 15m, 1h, 4h, 6h, 12h, 1d (skip 1m/5m as they often have no historical data)
+            preferred_timeframes = ["15m", "1h", "4h", "6h", "12h", "1d"]
+            print(f"[RL] Using timeframes (prioritizing shorter for more samples): {preferred_timeframes}")
+            
+            # For multi-symbol training, we need to create a replay for each symbol
+            # But PPO with VecEnv can handle multiple environments, so we'll create one per symbol
+            historical_replays = {}
+            for symbol in symbols:
+                print(f"\n[RL] Loading historical data for {symbol}...")
+                try:
+                    replay = HistoricalDataReplay(
+                        symbol=symbol,
+                        timeframes=preferred_timeframes,
+                        start_date=effective_start_date,
+                        end_date=self.historical_end_date,
+                        mode='spot',
+                        lookback_window=100,
+                    )
+                    historical_replays[symbol] = replay
+                    print(f"[RL] ✅ {symbol}: Loaded {sum(len(df) for df in replay.historical_data.values())} total candles")
+                except Exception as e:
+                    print(f"[RL] ⚠️  {symbol}: Failed to load historical data: {e}")
+                    continue
+            
+            if not historical_replays:
+                raise ValueError("No historical data loaded for any symbol!")
+            
+            print(f"\n[RL] Successfully loaded historical data for {len(historical_replays)} symbols")
+            
+            # Store replay map for multi-symbol training
+            self._historical_replay_map = historical_replays
+            
+            # Use the symbol with the most data for primary replay
+            # (Other symbols' replays will be used via the map in create_environment)
+            best_symbol = max(historical_replays.keys(), 
+                            key=lambda s: sum(len(df) for df in historical_replays[s].historical_data.values()))
+            self.historical_replay = historical_replays[best_symbol]
+            
+            # Show data summary
+            print(f"\n[RL] Historical Data Summary:")
+            for symbol, replay in historical_replays.items():
+                total_candles = sum(len(df) for df in replay.historical_data.values())
+                primary_tf = replay.primary_timeframe
+                primary_candles = len(replay.historical_data.get(primary_tf, pd.DataFrame()))
+                print(f"  {symbol}: {total_candles} total candles ({primary_candles} in {primary_tf})")
+            
+            print(f"[RL] Primary replay: {best_symbol} (most data)")
+            print(f"[RL] Multi-symbol training: {len(historical_replays)} symbols will be used")
+            
+            # Check data coverage and warn if insufficient
+            primary_df = self.historical_replay.historical_data.get(self.historical_replay.primary_timeframe, pd.DataFrame())
+            if not primary_df.empty:
+                first_date = primary_df['timestamp'].iloc[0]
+                last_date = primary_df['timestamp'].iloc[-1]
+                from datetime import datetime, timezone
+                # Use the actual oldest date found (effective_start_date) instead of requested
+                start_dt = datetime.fromisoformat(effective_start_date.replace('Z', '+00:00'))
+                end_dt = datetime.fromisoformat(self.historical_end_date.replace('Z', '+00:00'))
+                
+                # Ensure timezone-aware for date calculations
+                if isinstance(first_date, pd.Timestamp):
+                    actual_start = first_date.to_pydatetime()
+                    if actual_start.tzinfo is None:
+                        actual_start = actual_start.replace(tzinfo=timezone.utc)
+                elif isinstance(first_date, datetime):
+                    actual_start = first_date
+                    if actual_start.tzinfo is None:
+                        actual_start = actual_start.replace(tzinfo=timezone.utc)
+                else:
+                    actual_start = pd.Timestamp(first_date).to_pydatetime()
+                    if actual_start.tzinfo is None:
+                        actual_start = actual_start.replace(tzinfo=timezone.utc)
+                
+                if isinstance(last_date, pd.Timestamp):
+                    actual_end = last_date.to_pydatetime()
+                    if actual_end.tzinfo is None:
+                        actual_end = actual_end.replace(tzinfo=timezone.utc)
+                elif isinstance(last_date, datetime):
+                    actual_end = last_date
+                    if actual_end.tzinfo is None:
+                        actual_end = actual_end.replace(tzinfo=timezone.utc)
+                else:
+                    actual_end = pd.Timestamp(last_date).to_pydatetime()
+                    if actual_end.tzinfo is None:
+                        actual_end = actual_end.replace(tzinfo=timezone.utc)
+                
+                expected_days = (end_dt - start_dt).days
+                actual_days = (actual_end - actual_start).days
+                coverage = (actual_days / expected_days * 100) if expected_days > 0 else 0
+                
+                print(f"\n[RL] Historical Data Coverage Summary:")
+                print(f"  Requested: {effective_start_date} to {self.historical_end_date} ({expected_days} days)")
+                print(f"  Available: {actual_start.strftime('%Y-%m-%d %H:%M:%S')} to {actual_end.strftime('%Y-%m-%d %H:%M:%S')} ({actual_days} days)")
+                print(f"  Coverage: {coverage:.1f}%")
+                
+                if coverage < 50:
+                    print(f"\n[RL] ⚠️  WARNING: Low data coverage ({coverage:.1f}%)")
+                    print(f"[RL] CoinEx may not have historical data for the requested date range.")
+                    print(f"[RL] Consider:")
+                    print(f"[RL]   - Using a more recent start date (e.g., 2021-01-01)")
+                    print(f"[RL]   - Or using a different data source for older historical data")
+                    print(f"[RL] Training will continue with available data ({actual_days} days)")
+                elif coverage < 80:
+                    print(f"\n[RL] ⚠️  Note: Partial data coverage ({coverage:.1f}%)")
+                    print(f"[RL] Some historical periods may be missing, but training will proceed.")
+                else:
+                    print(f"\n[RL] ✅ Good data coverage ({coverage:.1f}%)")
+            
+            # Create environment with historical replay
+            self.create_environment(historical_replay=self.historical_replay)
+            
+            # Create or load model
+            load_checkpoint = not getattr(self, '_fresh_start', False)
+            self.create_model(load_checkpoint=load_checkpoint)
+            
+            # Start background trade update thread
+            self.start_trade_update_thread()
+            
+            # Training loop for historical data
+            state = self.state_manager.get_state()
+            current_timesteps = state.get('total_timesteps', 0)
+            target_timesteps = self.historical_pretrain_timesteps
+            remaining = max(0, target_timesteps - current_timesteps)
+            
+            print(f"[RL] Historical pre-training: {current_timesteps:,}/{target_timesteps:,} timesteps")
+            
+            callbacks = [
+                PauseResumeCallback(self.state_manager, self.pause_event),
+                CheckpointCallback(
+                    save_freq=self.checkpoint_interval,
+                    save_path=str(self.model_dir / "checkpoints"),
+                    name_prefix="rl_model_historical",
+                    save_replay_buffer=True,
+                    save_vecnormalize=True
+                ),
+                ExperienceReplayCallback(
+                    experience_buffer=self.experience_buffer,
+                    bc_trainer=self.bc_trainer,
+                )
+            ]
+            
+            episode = 0
+            chunk_size = 50000
+            
+            while remaining > 0:
+                # Check for graceful shutdown
+                if self.shutdown_event.is_set():
+                    print("\n[RL] Graceful shutdown requested during historical pre-training.")
+                    # Save final state before exiting
+                    state = self.state_manager.get_state()
+                    # Find actual latest checkpoint
+                    checkpoints_dir = self.model_dir / "checkpoints"
+                    checkpoint_path = None
+                    if checkpoints_dir.exists():
+                        checkpoints = sorted(checkpoints_dir.glob("rl_model_historical_*.zip"))
+                        if checkpoints:
+                            checkpoint_path = str(checkpoints[-1])
+                    if not checkpoint_path:
+                        checkpoint_path = str(self.model_dir / "checkpoints" / f"rl_model_historical_{current_timesteps}_steps.zip")
+                    self.state_manager.save_state(
+                        episode=episode,
+                        timesteps=current_timesteps,
+                        checkpoint_path=checkpoint_path,
+                        best_reward=state.get('best_reward', float('-inf')),
+                        total_trades=state.get('total_trades', 0),
+                        mode="training",
+                    )
+                    print(f"[RL] State saved: Episode {episode}, Timesteps {current_timesteps:,}/{target_timesteps:,}")
+                    return False  # Return False to indicate interruption
+                
+                # Check if paused
+                if self.pause_event.is_set():
+                    while self.pause_event.is_set():
+                        if self.shutdown_event.is_set():
+                            break
+                        time.sleep(0.5)
+                    if self.shutdown_event.is_set():
+                        break
+                
+                # Train for a chunk
+                train_chunk = min(chunk_size, remaining)
+                self.model.learn(
+                    total_timesteps=train_chunk,
+                    callback=callbacks,
+                    reset_num_timesteps=False,
+                    tb_log_name="PPO_Historical"
+                )
+                
+                current_timesteps += train_chunk
+                remaining -= train_chunk
+                episode += 1
+                
+                # Save state - find ACTUAL latest checkpoint (CheckpointCallback may have saved at different timestep)
+                checkpoints_dir = self.model_dir / "checkpoints"
+                checkpoint_path = None
+                
+                # Always find the actual latest checkpoint file (don't assume path based on timesteps)
+                if checkpoints_dir.exists():
+                    checkpoints = sorted(checkpoints_dir.glob("rl_model_historical_*.zip"))
+                    if checkpoints:
+                        checkpoint_path = str(checkpoints[-1])
+                        # Extract actual timesteps from checkpoint filename to verify
+                        import re
+                        match = re.search(r'_(\d+)_steps\.zip$', checkpoint_path)
+                        if match:
+                            checkpoint_timesteps = int(match.group(1))
+                            if checkpoint_timesteps != current_timesteps:
+                                print(f"[RL] ⚠️  Note: Latest checkpoint is at {checkpoint_timesteps:,} timesteps, but state shows {current_timesteps:,}")
+                                print(f"[RL] Using checkpoint: {checkpoint_path}")
+                
+                # Fallback to expected path if no checkpoint found
+                if not checkpoint_path:
+                    checkpoint_path = str(self.model_dir / "checkpoints" / f"rl_model_historical_{current_timesteps}_steps.zip")
+                
+                # Update state (use 'training' mode for historical phase too)
+                state = self.state_manager.get_state()
+                self.state_manager.save_state(
+                    episode=episode,
+                    timesteps=current_timesteps,
+                    checkpoint_path=checkpoint_path,
+                    best_reward=state.get('best_reward', float('-inf')),
+                    total_trades=state.get('total_trades', 0),
+                    mode="training",  # Use 'training' mode (historical is just a phase)
+                )
+                
+                progress_pct = (current_timesteps / target_timesteps) * 100
+                print(f"[RL] Historical pre-training progress: {current_timesteps:,}/{target_timesteps:,} ({progress_pct:.1f}%)")
+                
+                # Reset historical replay for next episode
+                if self.historical_replay:
+                    self.historical_replay.reset()
+            
+            print(f"\n[RL] ✅ Historical pre-training completed: {current_timesteps:,} timesteps")
+            print(f"[RL] Model ready for live paper trading fine-tuning")
+            
+            # Save final historical model
+            historical_model_path = self.model_dir / "historical_pretrained_model.zip"
+            self.model.save(str(historical_model_path))
+            print(f"[RL] Historical pre-trained model saved to {historical_model_path}")
+            
+            return True  # Return True to indicate successful completion
+            
+        except Exception as e:
+            print(f"[RL] Error during historical pre-training: {e}")
+            import traceback
+            traceback.print_exc()
+            # Save state even on error
+            state = self.state_manager.get_state()
+            checkpoint_path = str(self.model_dir / "checkpoints" / f"rl_model_historical_{current_timesteps}_steps.zip")
+            if not os.path.exists(checkpoint_path):
+                checkpoints_dir = self.model_dir / "checkpoints"
+                if checkpoints_dir.exists():
+                    checkpoints = sorted(checkpoints_dir.glob("rl_model_historical_*.zip"))
+                    if checkpoints:
+                        checkpoint_path = str(checkpoints[-1])
+            try:
+                self.state_manager.save_state(
+                    episode=episode,
+                    timesteps=current_timesteps,
+                    checkpoint_path=checkpoint_path,
+                    best_reward=state.get('best_reward', float('-inf')),
+                    total_trades=state.get('total_trades', 0),
+                    mode="training",
+                )
+            except:
+                pass
+            raise
     
     def _save_final_state(self, episode, current_timesteps, best_reward, total_trades):
         """Save final model and state before shutdown"""
@@ -1386,7 +1965,7 @@ def main():
     parser.add_argument("--model-dir", type=str, default="models/rl_models", help="Model directory")
     parser.add_argument("--monitor", action="store_true", help="Enable simple progress monitor")
     parser.add_argument("--dashboard", action="store_true", help="Enable full RL dashboard")
-    parser.add_argument("--accuracy-threshold", type=float, default=68.0,
+    parser.add_argument("--accuracy-threshold", type=float, default=85.0,
                         help="Win rate threshold (legacy - now using multi-metric gate with win rate + profit factor + Sharpe + drawdown)")
     parser.add_argument("--min-trades", type=int, default=50,
                         help="Minimum number of closed trades required before applying accuracy threshold (default: 50)")

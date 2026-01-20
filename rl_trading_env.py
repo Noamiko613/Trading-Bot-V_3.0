@@ -50,6 +50,7 @@ class TradingEnv(gym.Env):
         use_continuous_actions: bool = False,  # New: enable continuous position-based actions
         domain_randomization: bool = True,  # New: randomize fees/slippage for generalization
         kill_switch_enabled: bool = True,  # Disable for RL training to allow exploration
+        historical_replay: Optional[object] = None,  # HistoricalDataReplay instance for offline training
     ):
         super().__init__()
         
@@ -60,6 +61,8 @@ class TradingEnv(gym.Env):
         self.use_continuous_actions = use_continuous_actions
         self.domain_randomization = domain_randomization
         self.kill_switch_enabled = kill_switch_enabled
+        self.historical_replay = historical_replay
+        self.is_historical_mode = historical_replay is not None
         self.action_gating_enabled = os.getenv('ACTION_GATING_ENABLED', '0') == '1'
         try:
             self.gating_min_score = float(os.getenv('GATING_MIN_SCORE', '0.3'))
@@ -199,6 +202,8 @@ class TradingEnv(gym.Env):
         # Initialize simulator and analytics here, inside the process
         if self.simulator is None:
             TradeSimulator = _get_trade_simulator()
+            # During historical training, mark trades so they don't get counted as live paper trades
+            historical_mode = self.is_historical_mode
             self.simulator = TradeSimulator(
                 starting_balance=self.starting_balance,
                 symbol=self.symbol,
@@ -209,6 +214,10 @@ class TradingEnv(gym.Env):
                 max_trade_duration_hours=self.max_trade_duration_hours,
                 stale_check_interval_sec=self.stale_check_interval_sec,
             )
+            # Mark simulator as historical training mode
+            if historical_mode:
+                self.simulator.is_historical_training = True
+                print(f"[RL_ENV] Historical training mode: Trades will be marked as training data")
         else:
             # If it exists, just reset it
             self.simulator.reset(
@@ -250,8 +259,14 @@ class TradingEnv(gym.Env):
         self.sharpe_history.clear()
         
         # Load market data for all timeframes
-        self._lazy_init_fetchers()
-        self._load_market_data()
+        if self.is_historical_mode:
+            # Historical replay mode: reset replay and load initial data
+            self.historical_replay.reset()
+            self._load_historical_market_data()
+        else:
+            # Live mode: use data fetchers
+            self._lazy_init_fetchers()
+            self._load_market_data()
         
         # Ensure market_data is dict format for multi-timeframe
         if not isinstance(self.market_data, dict):
@@ -278,26 +293,40 @@ class TradingEnv(gym.Env):
         
         # CRITICAL: Refresh market data and update simulator BEFORE processing action
         # This ensures we have the latest prices for TP/SL checking
-        try:
-            if self.primary_timeframe in self.data_fetchers:
-                fetcher = self.data_fetchers[self.primary_timeframe]
-                candles = fetcher.get_kline_data(limit=min(self.lookback_window + 50, 200))
-                if candles:
-                    df = pd.DataFrame(candles)
-                    df['timestamp'] = pd.to_datetime(
-                        df['timestamp'],
-                        format="ISO8601",
-                        utc=True,
-                        errors="coerce",
-                    )
-                    df = df.dropna(subset=['timestamp']).sort_values('timestamp')
-                    if isinstance(self.market_data, dict):
-                        self.market_data[self.primary_timeframe] = df
-                    else:
-                        self.market_data = {self.primary_timeframe: df}
-        except Exception as e:
-            # If refresh fails, continue with cached data
-            pass
+        if self.is_historical_mode:
+            # Historical replay mode: advance to next candle
+            if not self.historical_replay.is_done():
+                self.historical_replay.step()
+                # Update market data from replay
+                all_data = self.historical_replay.get_all_current_data()
+                self.market_data = all_data
+            else:
+                # Reached end of historical data
+                observation = self._get_observation()
+                info = self._get_info()
+                return observation, 0.0, True, False, info
+        else:
+            # Live mode: fetch latest data
+            try:
+                if self.primary_timeframe in self.data_fetchers:
+                    fetcher = self.data_fetchers[self.primary_timeframe]
+                    candles = fetcher.get_kline_data(limit=min(self.lookback_window + 50, 200))
+                    if candles:
+                        df = pd.DataFrame(candles)
+                        df['timestamp'] = pd.to_datetime(
+                            df['timestamp'],
+                            format="ISO8601",
+                            utc=True,
+                            errors="coerce",
+                        )
+                        df = df.dropna(subset=['timestamp']).sort_values('timestamp')
+                        if isinstance(self.market_data, dict):
+                            self.market_data[self.primary_timeframe] = df
+                        else:
+                            self.market_data = {self.primary_timeframe: df}
+            except Exception as e:
+                # If refresh fails, continue with cached data
+                pass
         
         # Update simulator to check TP/SL on existing trades BEFORE processing new action
         # This ensures trades are closed when TP/SL is hit, not just when new actions are taken
@@ -578,7 +607,8 @@ class TradingEnv(gym.Env):
                                     'timeframe': '1h'
                                 }
                                 trade_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                print(f"[RL_ENV] 🟢 OPENING BUY TRADE | Pair: {self.symbol} | Time: {trade_time} | Entry: ${current_price:.2f} | Stop: ${enforced_stop:.2f} | TP: ${tp_price:.2f} | SL%: {stop_loss_pct*100:.2f}%")
+                                mode_prefix = "[HISTORICAL TRAINING] " if self.is_historical_mode else ""
+                                print(f"[RL_ENV] {mode_prefix}🟢 OPENING BUY TRADE | Pair: {self.symbol} | Time: {trade_time} | Entry: ${current_price:.2f} | Stop: ${enforced_stop:.2f} | TP: ${tp_price:.2f} | SL%: {stop_loss_pct*100:.2f}%")
                                 self._submit_with_gating(setup)
                                 self.total_trades_executed += 1
                                 self.last_trade_step = self.current_step
@@ -688,7 +718,8 @@ class TradingEnv(gym.Env):
                                     'timeframe': '1h'
                                 }
                                 trade_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                print(f"[RL_ENV] 🔴 OPENING SELL TRADE | Pair: {self.symbol} | Time: {trade_time} | Entry: ${current_price:.2f} | Stop: ${enforced_stop:.2f} | TP: ${tp_price:.2f} | SL%: {stop_loss_pct*100:.2f}%")
+                                mode_prefix = "[HISTORICAL TRAINING] " if self.is_historical_mode else ""
+                                print(f"[RL_ENV] {mode_prefix}🔴 OPENING SELL TRADE | Pair: {self.symbol} | Time: {trade_time} | Entry: ${current_price:.2f} | Stop: ${enforced_stop:.2f} | TP: ${tp_price:.2f} | SL%: {stop_loss_pct*100:.2f}%")
                                 self._submit_with_gating(setup)
                                 self.total_trades_executed += 1
                                 self.last_trade_step = self.current_step
@@ -961,7 +992,7 @@ class TradingEnv(gym.Env):
             self.data_unavailable = False
     
     def _load_market_data(self) -> None:
-        """Load initial OHLCV history for all configured timeframes."""
+        """Load initial OHLCV history for all configured timeframes (live mode)."""
         try:
             for tf, fetcher in self.data_fetchers.items():
                 try:
@@ -988,6 +1019,27 @@ class TradingEnv(gym.Env):
                 print(f"[RL_ENV] Warning: no primary timeframe data loaded for {self.symbol}")
         except Exception as exc:
             print(f"[RL_ENV] Error while loading market data: {exc}")
+            self.data_unavailable = True
+    
+    def _load_historical_market_data(self) -> None:
+        """Load initial historical data from replay (historical mode)."""
+        try:
+            if self.historical_replay is None:
+                self.data_unavailable = True
+                return
+            
+            # Get initial data from replay
+            all_data = self.historical_replay.get_all_current_data()
+            self.market_data = all_data
+            
+            primary_df = self.market_data.get(self.primary_timeframe, pd.DataFrame())
+            self.data_unavailable = primary_df.empty
+            if self.data_unavailable:
+                print(f"[RL_ENV] Warning: no primary timeframe data loaded for {self.symbol}")
+            else:
+                print(f"[RL_ENV] Loaded historical data: {len(primary_df)} candles in primary timeframe")
+        except Exception as exc:
+            print(f"[RL_ENV] Error while loading historical market data: {exc}")
             self.data_unavailable = True
     
     def _get_current_price(self) -> Optional[float]:

@@ -135,6 +135,8 @@ secrets.json
 # data
 # data/
 data/ada/1h.json
+# Historical data cache
+data/historical_cache/
 data/ada/2h.json
 data/ada/4h.json
 data/ada/5min.json

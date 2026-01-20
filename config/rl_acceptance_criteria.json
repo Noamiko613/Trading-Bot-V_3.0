@@ -1,6 +1,6 @@
 {
   "acceptance_criteria": {
-    "win_rate_threshold": 70.0,
+    "win_rate_threshold": 85.0,
     "profit_factor_threshold": 1.5,
     "sharpe_threshold": 1.5,
     "max_drawdown_threshold": 12.0,
