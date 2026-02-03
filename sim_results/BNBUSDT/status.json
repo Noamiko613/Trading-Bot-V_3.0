@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-01-06T23:40:55.723178",
+  "timestamp": "2026-02-03T16:02:03.707398",
   "symbol": "BNBUSDT",
   "mode": "spot",
   "balance": 1000000.0,
@@ -8,7 +8,31 @@
   "min_equity": 1000000.0,
   "last_drawdown_pct": 0.0,
   "trading_halted": false,
-  "open_trades": [],
+  "open_trades": [
+    {
+      "id": "1770140555-0",
+      "time": "2026-02-03T12:42:34.624049",
+      "pattern": "RL_BUY",
+      "side": "BUY",
+      "symbol": "BNBUSDT",
+      "entry": 776.13562299,
+      "entry_fees": 41.61118481,
+      "stop": 750.3972677,
+      "tp": 806.37909845,
+      "rr": 1.18,
+      "rr_text": "1.18|1",
+      "risk_pct": 0.25,
+      "size": 97.13130352,
+      "status": "OPEN",
+      "max_drawdown": 0.45,
+      "min_runup": 0.07,
+      "init_stop": 750.3972677,
+      "r_per_unit": 25.738355291033,
+      "session_allowed": null,
+      "timeframe": "1h",
+      "is_historical_training": false
+    }
+  ],
   "closed_trades": [],
   "error": null
 }

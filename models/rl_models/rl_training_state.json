@@ -1,9 +1,10 @@
 {
-  "episode": 2,
-  "total_timesteps": 450000,
-  "last_checkpoint": "models\\rl_models\\checkpoints\\rl_model_50000_steps.zip",
+  "episode": 3,
+  "total_timesteps": 1300000,
+  "last_checkpoint": "models\\rl_models\\checkpoints\\rl_model_historical_50000_steps.zip",
   "best_reward": -Infinity,
-  "total_trades": 19,
+  "total_trades": 1,
   "mode": "training",
-  "timestamp": "2026-01-06T16:29:22.518948"
+  "historical_pretraining_completed": true,
+  "timestamp": "2026-02-02T23:38:54.151505"
 }

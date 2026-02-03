@@ -253,20 +253,43 @@ class RLDashboard:
                 closed_trades = self.analytics.get_closed_trades(exclude_historical_training=False)
                 
                 # Get ALL open trades (including historical training)
+                import json
+                import time as time_module
+                log_path = r"c:\Users\Mini Echo09\Desktop\Trading-Bot-V_2.0-feature-enhanced-logging-metrics\.cursor\debug.log"
                 conn = sqlite3.connect(self.db_path)
                 try:
                     cursor = conn.cursor()
+                    # #region agent log
+                    try:
+                        with open(log_path, 'a') as f:
+                            f.write(json.dumps({"id":f"log_{int(time_module.time()*1000)}_dashboard_query_start","timestamp":int(time_module.time()*1000),"location":"rl_dashboard.py:259","message":"Dashboard querying trades_open","data":{"db_path":self.db_path},"sessionId":"debug-session","runId":"run1","hypothesisId":"F,G"}) + "\n")
+                    except: pass
+                    # #endregion
                     cursor.execute("SELECT * FROM trades_open")
                     columns = [desc[0] for desc in cursor.description] if cursor.description else []
                     open_trades = []
+                    row_count = 0
                     for row in cursor.fetchall():
                         open_trades.append(dict(zip(columns, row)))
+                        row_count += 1
+                    # #region agent log
+                    try:
+                        with open(log_path, 'a') as f:
+                            f.write(json.dumps({"id":f"log_{int(time_module.time()*1000)}_dashboard_query_result","timestamp":int(time_module.time()*1000),"location":"rl_dashboard.py:263","message":"Dashboard query result","data":{"rows_fetched":row_count,"open_trades_count":len(open_trades)},"sessionId":"debug-session","runId":"run1","hypothesisId":"F,G"}) + "\n")
+                    except: pass
+                    # #endregion
                 finally:
                     conn.close()
                 
                 # Store open trades count for display
                 self.stats['open_trades_count'] = len(open_trades)
                 self.stats['open_trades'] = open_trades
+                # #region agent log
+                try:
+                    with open(log_path, 'a') as f:
+                        f.write(json.dumps({"id":f"log_{int(time_module.time()*1000)}_dashboard_stats_set","timestamp":int(time_module.time()*1000),"location":"rl_dashboard.py:269","message":"Dashboard stats set","data":{"open_trades_count":self.stats['open_trades_count'],"open_trades_list_length":len(self.stats['open_trades'])},"sessionId":"debug-session","runId":"run1","hypothesisId":"F,G"}) + "\n")
+                except: pass
+                # #endregion
                 
                 if closed_trades:
                     # Calculate PPO model accuracy from ALL closed trades
@@ -293,7 +316,7 @@ class RLDashboard:
                     self.stats['winning_trades'] = 0
                     self.stats['losing_trades'] = 0
                 
-                # Stale detection: consider ANY trade activity (open or closed)
+                # Stale detection: use trade activity OR state file timestamp (so historical phase / active training doesn't show false STALE)
                 try:
                     def _parse_iso(ts: Optional[str]):
                         if isinstance(ts, str) and ts:
@@ -313,11 +336,27 @@ class RLDashboard:
                         if candidate and (last_activity_dt is None or candidate > last_activity_dt):
                             last_activity_dt = candidate
 
+                    # During historical pre-training there are no trades; use state file as "last activity"
+                    in_historical_phase = self.state.get('historical_pretraining_completed', True) is False
+                    state_ts_str = self.state.get('timestamp')
+                    state_activity_dt = _parse_iso(state_ts_str) if state_ts_str else None
+                    if state_activity_dt and (last_activity_dt is None or state_activity_dt > last_activity_dt):
+                        last_activity_dt = state_activity_dt
+                    self.stats['in_historical_phase'] = in_historical_phase
+
                     if open_trades and last_activity_dt is not None:
-                        # We have open trades; do not flag stale—just report recency
                         delta_min = max(0, int((now - last_activity_dt).total_seconds() // 60))
                         self.stats['stale_minutes'] = delta_min
                         self.stats['is_stale'] = False
+                    elif in_historical_phase:
+                        # Historical phase: don't mark STALE from lack of trades; use state file recency only
+                        if last_activity_dt is not None:
+                            delta_min = max(0, int((now - last_activity_dt).total_seconds() // 60))
+                            self.stats['stale_minutes'] = delta_min
+                            self.stats['is_stale'] = delta_min >= max(self.stale_threshold_min, 60)  # 60min threshold during historical
+                        else:
+                            self.stats['stale_minutes'] = None
+                            self.stats['is_stale'] = False
                     elif last_activity_dt is not None:
                         delta_min = max(0, int((now - last_activity_dt).total_seconds() // 60))
                         self.stats['stale_minutes'] = delta_min
@@ -325,6 +364,15 @@ class RLDashboard:
                     else:
                         self.stats['stale_minutes'] = None
                         self.stats['is_stale'] = False
+                    # #region agent log
+                    try:
+                        import json
+                        import time as time_module
+                        log_path = r"c:\Users\Mini Echo09\Desktop\Trading-Bot-V_2.0-feature-enhanced-logging-metrics\.cursor\debug.log"
+                        with open(log_path, 'a') as f:
+                            f.write(json.dumps({"id":f"log_{int(time_module.time()*1000)}_dashboard_stale_calc","timestamp":int(time_module.time()*1000),"location":"rl_dashboard.py:318","message":"Dashboard stale calculation","data":{"now":now.isoformat(),"last_closed_dt":last_closed_dt.isoformat() if last_closed_dt else None,"last_open_dt":last_open_dt.isoformat() if last_open_dt else None,"last_activity_dt":last_activity_dt.isoformat() if last_activity_dt else None,"stale_minutes":self.stats.get('stale_minutes'),"open_trades_count":len(open_trades)},"sessionId":"debug-session","runId":"run1","hypothesisId":"K"}) + "\n")
+                    except: pass
+                    # #endregion
                 except Exception:
                     self.stats['stale_minutes'] = None
                     self.stats['is_stale'] = False
@@ -465,12 +513,19 @@ class RLDashboard:
             lines.append(f"{Colors.YELLOW}Open Trades: {open_count}{Colors.RESET}")
         lines.append(f"Total P&L: ${self.stats['total_pnl']:,.2f}")
         lines.append(f"Avg Reward: {self.stats['avg_reward']:.4f}")
-        # Stale status
+        # Phase and stale status
+        if self.stats.get('in_historical_phase'):
+            lines.append(f"{Colors.CYAN}Phase: Historical pre-training{Colors.RESET}")
         try:
             stale_min = self.stats.get('stale_minutes')
             if stale_min is not None:
                 flag = f" {Colors.BRIGHT_RED}[STALE]{Colors.RESET}" if self.stats.get('is_stale') else ""
-                label = "Last Activity" if open_count > 0 else "Last Closed"
+                if self.stats.get('in_historical_phase'):
+                    label = "Last state update"
+                elif open_count > 0:
+                    label = "Last Activity"
+                else:
+                    label = "Last Closed"
                 lines.append(f"{label}: {stale_min}m ago{flag}")
         except Exception:
             pass

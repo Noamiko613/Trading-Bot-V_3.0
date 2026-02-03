@@ -6,6 +6,14 @@ Wrapper script that:
 1. First downloads/caches all historical data
 2. Then runs RL training on the cached data
 
+When the requested timesteps are done, rl_training.py:
+- Checks model accuracy (multi-metric gate: win rate, profit factor, Sharpe, drawdown).
+- If accuracy threshold not yet reached: continues training on live data (paper mode) until it is.
+- When threshold is reached: switches to paper trading on live data and sends a notification
+  email to noamiko613@gmail.com (override with RL_NOTIFY_EMAIL_TO). To enable email, set
+  RL_SMTP_USER and RL_SMTP_PASSWORD (e.g. Gmail app password); optional: RL_SMTP_HOST,
+  RL_SMTP_PORT.
+
 Usage:
     python run_rl_training.py [same arguments as rl_training.py]
 """
@@ -17,14 +25,9 @@ from datetime import datetime
 from pathlib import Path
 from download_historical_data import HistoricalDataDownloader, DEFAULT_SYMBOLS, DEFAULT_TIMEFRAMES
 
-# Import rl_training defaults
-try:
-    from rl_training import RL_TRAINING_SYMBOLS, RL_TRAINING_TIMEFRAMES
-    TRAINING_SYMBOLS = RL_TRAINING_SYMBOLS
-    TRAINING_TIMEFRAMES = RL_TRAINING_TIMEFRAMES
-except ImportError:
-    TRAINING_SYMBOLS = DEFAULT_SYMBOLS
-    TRAINING_TIMEFRAMES = DEFAULT_TIMEFRAMES
+# Use same symbols/timeframes as downloader (matches rl_training.py; we avoid importing rl_training here so torch is not loaded until the subprocess runs)
+TRAINING_SYMBOLS = DEFAULT_SYMBOLS
+TRAINING_TIMEFRAMES = DEFAULT_TIMEFRAMES
 
 
 def main():
@@ -68,13 +71,14 @@ All arguments are passed to rl_training.py after data download completes.
     # Use RL training timeframes (automatically imported)
     timeframes = TRAINING_TIMEFRAMES
     
+    # Date range: 2019-12-01 (earliest CoinEx) through today
+    start_date = args.historical_start_date or "2019-12-01"
+    end_date = args.historical_end_date or datetime.now().strftime("%Y-%m-%d")
+    
     print(f"[Runner] Will download data for:")
     print(f"  Symbols: {', '.join(symbols)}")
     print(f"  Timeframes: {', '.join(timeframes)}")
-    
-    # Determine date range
-    start_date = args.historical_start_date or "2019-12-01"
-    end_date = args.historical_end_date or datetime.now().strftime("%Y-%m-%d")
+    print(f"  Date range: {start_date} → {end_date} (CoinEx earliest → latest)")
     
     if not args.skip_download and not args.download_only:
         print("="*80)

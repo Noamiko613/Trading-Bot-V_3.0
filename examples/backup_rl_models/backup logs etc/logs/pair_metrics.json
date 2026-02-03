@@ -1,0 +1,62 @@
+{
+  "BTCUSDT": {
+    "trades": 373,
+    "wins": 8,
+    "losses": 365,
+    "breakevens": 0,
+    "total_pnl": -172204.68,
+    "gross_profit": 3812.6000000000004,
+    "gross_loss": 176017.28000000003,
+    "avg_pnl": -461.67,
+    "win_rate_pct": 2.14,
+    "profit_factor": 0.0217
+  },
+  "BNBUSDT": {
+    "trades": 362,
+    "wins": 10,
+    "losses": 352,
+    "breakevens": 0,
+    "total_pnl": -182374.79,
+    "gross_profit": 4413.049999999999,
+    "gross_loss": 186787.84000000014,
+    "avg_pnl": -503.8,
+    "win_rate_pct": 2.76,
+    "profit_factor": 0.0236
+  },
+  "XRPUSDT": {
+    "trades": 382,
+    "wins": 15,
+    "losses": 367,
+    "breakevens": 0,
+    "total_pnl": -82116.13,
+    "gross_profit": 14027.269999999999,
+    "gross_loss": 96143.39999999995,
+    "avg_pnl": -214.96,
+    "win_rate_pct": 3.93,
+    "profit_factor": 0.1459
+  },
+  "SOLUSDT": {
+    "trades": 369,
+    "wins": 17,
+    "losses": 352,
+    "breakevens": 0,
+    "total_pnl": -137152.38,
+    "gross_profit": 12969.890000000005,
+    "gross_loss": 150122.26999999996,
+    "avg_pnl": -371.69,
+    "win_rate_pct": 4.61,
+    "profit_factor": 0.0864
+  },
+  "ETHUSDT": {
+    "trades": 370,
+    "wins": 11,
+    "losses": 359,
+    "breakevens": 0,
+    "total_pnl": -167697.44,
+    "gross_profit": 9508.93,
+    "gross_loss": 177206.37000000005,
+    "avg_pnl": -453.24,
+    "win_rate_pct": 2.97,
+    "profit_factor": 0.0537
+  }
+}

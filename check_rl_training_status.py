@@ -41,15 +41,32 @@ def check_state_file(state_file_path: Path):
         print(f"  Best Reward: {state.get('best_reward', 'N/A')}")
         
         # Check timestamp
+        import json
+        import time as time_module
+        log_path = r"c:\Users\Mini Echo09\Desktop\Trading-Bot-V_2.0-feature-enhanced-logging-metrics\.cursor\debug.log"
         timestamp_str = state.get('timestamp')
         if timestamp_str:
             try:
+                # #region agent log
+                try:
+                    with open(log_path, 'a') as f:
+                        f.write(json.dumps({"id":f"log_{int(time_module.time()*1000)}_status_parse_start","timestamp":int(time_module.time()*1000),"location":"check_rl_training_status.py:45","message":"Status script parsing timestamp","data":{"timestamp_str":timestamp_str},"sessionId":"debug-session","runId":"run1","hypothesisId":"I"}) + "\n")
+                except: pass
+                # #endregion
                 state_time = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
                 if state_time.tzinfo:
                     state_time = state_time.replace(tzinfo=None)
-                now = datetime.now(timezone.utc).replace(tzinfo=None)
+                # Use UTC time consistently for comparison
+                now = datetime.now(timezone.utc)
+                if now.tzinfo:
+                    now = now.replace(tzinfo=None)
                 age_minutes = (now - state_time).total_seconds() / 60
-                
+                # #region agent log
+                try:
+                    with open(log_path, 'a') as f:
+                        f.write(json.dumps({"id":f"log_{int(time_module.time()*1000)}_status_parse_result","timestamp":int(time_module.time()*1000),"location":"check_rl_training_status.py:51","message":"Status script timestamp calculation","data":{"state_time":state_time.isoformat(),"now":now.isoformat(),"age_minutes":age_minutes,"state_time_tz":str(state_time.tzinfo),"now_tz":str(now.tzinfo)},"sessionId":"debug-session","runId":"run1","hypothesisId":"I,J"}) + "\n")
+                except: pass
+                # #endregion
                 print(f"  Last Update: {state_time.strftime('%Y-%m-%d %H:%M:%S')}")
                 print(f"  Age: {age_minutes:.1f} minutes ago")
                 
@@ -155,7 +172,11 @@ def check_database(db_path: str):
                     latest_time = datetime.fromisoformat(latest[0].replace('Z', '+00:00'))
                     if latest_time.tzinfo:
                         latest_time = latest_time.replace(tzinfo=None)
-                    age_minutes = (datetime.now(timezone.utc).replace(tzinfo=None) - latest_time).total_seconds() / 60
+                    # Use UTC time consistently
+                    now_utc = datetime.now(timezone.utc)
+                    if now_utc.tzinfo:
+                        now_utc = now_utc.replace(tzinfo=None)
+                    age_minutes = (now_utc - latest_time).total_seconds() / 60
                     print(f"\n  Latest Closed Trade: {latest_time.strftime('%Y-%m-%d %H:%M:%S')} ({age_minutes:.1f}m ago)")
                     if age_minutes > 60:
                         print(f"  ⚠️  Last trade was over an hour ago - training may be stalled")
@@ -208,7 +229,10 @@ def main():
                 state_time = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
                 if state_time.tzinfo:
                     state_time = state_time.replace(tzinfo=None)
-                now = datetime.now(timezone.utc).replace(tzinfo=None)
+                # Use UTC time consistently for comparison
+                now = datetime.now(timezone.utc)
+                if now.tzinfo:
+                    now = now.replace(tzinfo=None)
                 age_minutes = (now - state_time).total_seconds() / 60
                 
                 if age_minutes > 60:

@@ -1,0 +1,27 @@
+{
+  "window_counter": 1,
+  "recent_windows": [
+    {
+      "window_id": 1,
+      "metrics": {
+        "total_trades": 500,
+        "winning_trades": 51,
+        "losing_trades": 449,
+        "breakeven_trades": 0,
+        "win_rate": 10.2,
+        "total_pnl": -201161.24,
+        "avg_pnl": -402.32,
+        "avg_win": 602.76,
+        "avg_loss": -516.49,
+        "avg_r_multiple": 9963276008.68,
+        "expectancy": 9963276008.68,
+        "profit_factor": 0.13,
+        "max_drawdown": 200378.2,
+        "max_drawdown_pct": 201.96,
+        "sharpe_ratio": 0.7962386072390522,
+        "sortino_ratio": -0.14,
+        "max_consecutive_wins": 7,
+        "max_consecutive_losses": 70,
+        "evaluation_passed": false,
+        "win_rate_ok": false,
+        "profit_factor_ok": 

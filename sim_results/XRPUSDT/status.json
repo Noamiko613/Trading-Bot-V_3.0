@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-01-06T23:40:56.693164",
+  "timestamp": "2026-02-03T16:02:04.218480",
   "symbol": "XRPUSDT",
   "mode": "spot",
   "balance": 1000000.0,
@@ -8,7 +8,31 @@
   "min_equity": 1000000.0,
   "last_drawdown_pct": 0.0,
   "trading_halted": false,
-  "open_trades": [],
+  "open_trades": [
+    {
+      "id": "1770130378-0",
+      "time": "2026-02-03T09:52:58.324236",
+      "pattern": "RL_BUY",
+      "side": "BUY",
+      "symbol": "XRPUSDT",
+      "entry": 1.61111131,
+      "entry_fees": 31.1259851,
+      "stop": 1.53913955,
+      "tp": 1.70329067,
+      "rr": 1.28,
+      "rr_text": "1.28|1",
+      "risk_pct": 0.25,
+      "size": 34735.84884554,
+      "status": "OPEN",
+      "max_drawdown": 0.43,
+      "min_runup": 0.13,
+      "init_stop": 1.53913955,
+      "r_per_unit": 0.071971754919,
+      "session_allowed": null,
+      "timeframe": "1h",
+      "is_historical_training": false
+    }
+  ],
   "closed_trades": [],
   "error": null
 }

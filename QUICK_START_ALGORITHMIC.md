@@ -14,7 +14,7 @@
 
 3. **Monitor multiple pairs:**
    ```bash
-   python start_algorithmic_trading.py --pairs BTCUSDT ETHUSDT SOLUSDT XRPUSDT BNBUSDT ADAUSDT --dashboard
+   python start_algorithmic_trading.py --pairs BTCUSDT ETHUSDT SOLUSDT XRPUSDT --dashboard
    ```
 
 ## What It Does

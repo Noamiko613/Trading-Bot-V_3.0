@@ -8,7 +8,7 @@ for offline pre-training of RL models.
 
 import pandas as pd
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Deque
+from typing import Dict, List, Optional, Deque, Tuple
 from collections import deque
 from pathlib import Path
 import json
@@ -17,6 +17,78 @@ from verify_patterns import normalize_symbol_to_ccxt
 
 # Cache directory (same as download_historical_data.py)
 CACHE_DIR = Path("data/historical_cache")
+
+
+def get_common_cache_date_range(
+    symbols: List[str],
+    timeframes: List[str],
+    requested_start: str,
+    requested_end: str,
+) -> Tuple[Optional[str], Optional[str], Dict[str, Dict]]:
+    """
+    Compute the date range that ALL symbols have in cache (intersection).
+    This avoids "some pairs 2025 only, others other times" by using one aligned range.
+    Returns (common_start, common_end, per_symbol_info).
+    per_symbol_info[symbol] = {"start": str, "end": str, "candles": int, "ok": bool}.
+    """
+    requested_start_dt = pd.to_datetime(requested_start, utc=True)
+    requested_end_dt = pd.to_datetime(requested_end, utc=True)
+    per_symbol_range: Dict[str, Optional[Tuple[pd.Timestamp, pd.Timestamp]]] = {}
+    per_symbol_info: Dict[str, Dict] = {}
+
+    for symbol in symbols:
+        sym_clean = symbol.replace("/", "_")
+        range_start: Optional[pd.Timestamp] = None
+        range_end: Optional[pd.Timestamp] = None
+        total_candles = 0
+        for tf in timeframes:
+            cache_path = CACHE_DIR / f"{sym_clean}_{tf}.csv"
+            if not cache_path.exists():
+                continue
+            try:
+                df = pd.read_csv(cache_path)
+                if df.empty or "timestamp" not in df.columns:
+                    continue
+                df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+                df = df.dropna(subset=["timestamp"])
+                if df.empty:
+                    continue
+                c_start = df["timestamp"].min()
+                c_end = df["timestamp"].max()
+                total_candles += len(df)
+                if range_start is None or c_start < range_start:
+                    range_start = c_start
+                if range_end is None or c_end > range_end:
+                    range_end = c_end
+            except Exception:
+                continue
+        if range_start is not None and range_end is not None:
+            per_symbol_range[symbol] = (range_start, range_end)
+            per_symbol_info[symbol] = {
+                "start": range_start.strftime("%Y-%m-%d"),
+                "end": range_end.strftime("%Y-%m-%d"),
+                "candles": total_candles,
+                "ok": True,
+            }
+        else:
+            per_symbol_range[symbol] = None
+            per_symbol_info[symbol] = {"start": None, "end": None, "candles": 0, "ok": False}
+
+    # Intersection: common_start = max(starts), common_end = min(ends)
+    starts = [r[0] for r in per_symbol_range.values() if r is not None]
+    ends = [r[1] for r in per_symbol_range.values() if r is not None]
+    if not starts or not ends:
+        return None, None, per_symbol_info
+    common_start = max(starts)
+    common_end = min(ends)
+    if common_start >= common_end:
+        return None, None, per_symbol_info
+    # Clip to requested range
+    common_start = max(common_start, requested_start_dt)
+    common_end = min(common_end, requested_end_dt)
+    if common_start >= common_end:
+        return None, None, per_symbol_info
+    return common_start.strftime("%Y-%m-%d"), common_end.strftime("%Y-%m-%d"), per_symbol_info
 
 
 class HistoricalDataReplay:

@@ -21,14 +21,10 @@ from pathlib import Path
 from typing import List, Dict, Optional
 import pandas as pd
 
-# Import RL training config
-try:
-    from rl_training import RL_TRAINING_SYMBOLS, RL_TRAINING_TIMEFRAMES
-    DEFAULT_SYMBOLS = RL_TRAINING_SYMBOLS
-    DEFAULT_TIMEFRAMES = RL_TRAINING_TIMEFRAMES
-except ImportError:
-    DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
-    DEFAULT_TIMEFRAMES = ["15m", "1h", "4h", "6h", "12h", "1d"]
+# Default symbols/timeframes for RL training (must match rl_training.RL_TRAINING_*).
+# Defined here to avoid importing rl_training (which pulls in torch) when only downloading.
+DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
+DEFAULT_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "6h", "12h", "1d"]
 
 DEFAULT_START_DATE = "2019-12-01"
 DEFAULT_END_DATE = datetime.now().strftime("%Y-%m-%d")
@@ -91,81 +87,59 @@ class HistoricalDataDownloader:
         return self.cache_dir / f"{symbol_clean}_{timeframe}.csv"
     
     def _is_cached(self, symbol: str, timeframe: str, start_date: str, end_date: str) -> bool:
-        """Check if data is already cached and up to date."""
+        """Check if data is already cached. Once cached (from 2019 / requested start), use it—do not re-download."""
         cache_path = self._get_cache_path(symbol, timeframe)
         
-        if not cache_path.exists():
+        if not cache_path.exists() or cache_path.stat().st_size == 0:
             return False
         
-        # If file exists, check if it has data and covers the requested range
+        parsed_ok = False
+        start_ok = False
+        
+        # Verify cache has valid data and starts from 2019 (or requested start)
         try:
-            # Try to read the cache file to verify it has data
-            import pandas as pd
             df = pd.read_csv(cache_path)
-            if df.empty:
-                return False
-            
-            # Check if it has timestamp column
-            if 'timestamp' not in df.columns:
-                return False
-            
-            # Convert timestamp to datetime
-            df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True, errors='coerce')
-            df = df.dropna(subset=['timestamp'])
-            
-            if df.empty:
-                return False
-            
-            # Get actual date range from cached file
-            cached_start_dt = df['timestamp'].min()
-            cached_end_dt = df['timestamp'].max()
-            
-            # Parse requested dates
-            requested_start_dt = pd.to_datetime(start_date, utc=True)
-            requested_end_dt = pd.to_datetime(end_date, utc=True)
-            
-            # Check if cached data covers the requested range (with some flexibility)
-            # Allow cached data to be slightly before requested start (within 30 days)
-            # and slightly after requested end (within 7 days)
-            start_ok = cached_start_dt <= requested_start_dt or (requested_start_dt - cached_start_dt).days <= 30
-            end_ok = cached_end_dt >= requested_end_dt or (cached_end_dt - requested_end_dt).days <= 7
-            
-            if start_ok and end_ok:
-                # Cache file exists and covers the range - use it!
-                return True
-            
-        except Exception as e:
-            # If we can't read the file, check metadata as fallback
+            if df.empty or 'timestamp' not in df.columns:
+                pass
+            else:
+                df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True, errors='coerce')
+                df = df.dropna(subset=['timestamp'])
+                if not df.empty:
+                    parsed_ok = True
+                    cached_start_dt = df['timestamp'].min()
+                    requested_start_dt = pd.to_datetime(start_date, utc=True)
+                    # Cached must start at or before requested start (e.g. 2019-12-01). Allow 30-day flexibility.
+                    start_ok = cached_start_dt <= requested_start_dt or (requested_start_dt - cached_start_dt).days <= 30
+                    if start_ok:
+                        return True
+        except Exception:
             pass
         
-        # Fallback: Check metadata
+        # If we parsed but cache doesn't start from 2019, re-download
+        if parsed_ok and not start_ok:
+            return False
+        
+        # Fallback: metadata says we have cached data from requested start
         key = f"{symbol}_{timeframe}"
         if key in self.metadata:
-            cached_start = self.metadata[key].get('start_date')
-            cached_end = self.metadata[key].get('end_date')
-            
-            # Check if cached data covers the requested range
-            if cached_start and cached_end:
+            cached_start = self.metadata[key].get('start_date') or self.metadata[key].get('actual_start_date')
+            if cached_start:
                 try:
-                    cached_start_dt = datetime.fromisoformat(cached_start.replace('Z', '+00:00'))
-                    cached_end_dt = datetime.fromisoformat(cached_end.replace('Z', '+00:00'))
+                    cached_start_dt = datetime.fromisoformat(str(cached_start).replace('Z', '+00:00'))
+                    if cached_start_dt.tzinfo:
+                        cached_start_dt = cached_start_dt.replace(tzinfo=None)
                     requested_start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
-                    requested_end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
-                    
-                    # Check if cached data covers the requested range (more lenient)
+                    if requested_start_dt.tzinfo:
+                        requested_start_dt = requested_start_dt.replace(tzinfo=None)
                     start_ok = cached_start_dt <= requested_start_dt or (requested_start_dt - cached_start_dt).days <= 30
-                    end_ok = cached_end_dt >= requested_end_dt or (cached_end_dt - requested_end_dt).days <= 7
-                    
-                    if start_ok and end_ok:
+                    if start_ok:
                         return True
                 except Exception as e:
                     print(f"[Downloader] Warning: Error checking cache metadata: {e}")
         
-        # If file exists but doesn't cover range, still return True (better to use partial data than re-download)
-        # User can use --force-download if they want fresh data
+        # Last resort: non-empty cache exists but we couldn't validate (e.g. parse error). Use it; use --force-download to re-download.
         if cache_path.exists() and cache_path.stat().st_size > 0:
             return True
-        
         return False
     
     def _save_to_cache(self, symbol: str, timeframe: str, candles: List[Dict], 

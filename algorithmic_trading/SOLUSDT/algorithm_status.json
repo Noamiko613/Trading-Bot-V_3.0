@@ -1,0 +1,30 @@
+{
+  "timestamp": "2026-02-03T16:01:57.699100",
+  "symbol": "SOLUSDT",
+  "statistics": {
+    "symbol": "SOLUSDT",
+    "balance": 10000.0,
+    "equity": 10000.0,
+    "open_trades": 0,
+    "closed_trades": 0,
+    "overall_stats": {
+      "total_trades": 0,
+      "win_rate": 0.0,
+      "avg_r_multiple": 0.0,
+      "total_pnl": 0.0,
+      "profit_factor": 0.0
+    },
+    "algorithm_stats": {},
+    "probationary_stats": {},
+    "system_stats": {
+      "algorithms_tested": 984,
+      "algorithms_validated": 0,
+      "algorithms_active": 0,
+      "total_trades": 0,
+      "last_discovery": "2026-02-03T15:11:10.196030",
+      "last_market_update": "2026-02-03T16:01:32.262511",
+      "market_data_points": 250,
+      "probationary_count": 0
+    }
+  }
+}

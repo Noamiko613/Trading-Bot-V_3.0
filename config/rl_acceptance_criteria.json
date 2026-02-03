@@ -1,9 +1,9 @@
 {
   "acceptance_criteria": {
-    "win_rate_threshold": 85.0,
-    "profit_factor_threshold": 1.5,
-    "sharpe_threshold": 1.5,
-    "max_drawdown_threshold": 12.0,
+    "win_rate_threshold": 86.0,
+    "profit_factor_threshold": 1.55,
+    "sharpe_threshold": 1.6,
+    "max_drawdown_threshold": 11.5,
     "min_trades_per_window": 500,
     "stability_windows_required": 3,
     "window_size_trades": 500,
@@ -17,19 +17,26 @@
     "sampling_ratios": {
       "on_policy_ppo": 0.75,
       "bc_from_good": 0.15,
-      "negative_correction": 0.10
+      "negative_correction": 0.1
     },
     "description": "Fixed capacities: 10k transitions each (top/bottom 25% episodes). Sampling: 75% PPO, 15% BC, 10% negative correction."
   },
   "normalization": {
-    "reward_clip_range": [-1.0, 1.0],
+    "reward_clip_range": [
+      -1.0,
+      1.0
+    ],
     "use_running_mean_std": true,
     "observation_normalization": true,
     "description": "Rewards clipped to [-1, 1]. Running mean/std normalization for rewards and observations to stabilize learning."
   },
   "action_space": {
     "use_continuous_actions": false,
-    "discrete_actions": ["hold", "buy", "sell"],
+    "discrete_actions": [
+      "hold",
+      "buy",
+      "sell"
+    ],
     "position_sizing_layer": {
       "enabled": false,
       "max_position_fraction": 0.5,
@@ -58,7 +65,8 @@
     "profit_factor_increment": 0.05,
     "sharpe_increment": 0.1,
     "drawdown_decrement": 0.5,
-    "description": "If repeated eval failures or rollbacks occur, automatically tighten gates (higher WR/PF/Sharpe, lower DD) and resume training."
+    "description": "If repeated eval failures or rollbacks occur, automatically tighten gates (higher WR/PF/Sharpe, lower DD) and resume training.",
+    "applied": 1,
+    "last_reason": "eval_failures"
   }
 }
-

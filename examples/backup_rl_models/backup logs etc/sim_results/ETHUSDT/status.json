@@ -1,0 +1,14 @@
+{
+  "timestamp": "2026-01-13T19:18:41.232610",
+  "symbol": "ETHUSDT",
+  "mode": "spot",
+  "balance": 1000000.0,
+  "equity": 1000000.0,
+  "max_equity": 1000000.0,
+  "min_equity": 1000000.0,
+  "last_drawdown_pct": 0.0,
+  "trading_halted": false,
+  "open_trades": [],
+  "closed_trades": [],
+  "error": null
+}

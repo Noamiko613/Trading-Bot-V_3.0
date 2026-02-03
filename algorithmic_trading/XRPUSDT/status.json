@@ -1,0 +1,17 @@
+{
+  "timestamp": "2026-02-03T16:01:57.711796",
+  "symbol": "XRPUSDT",
+  "balance": 10000.0,
+  "equity": 10000.0,
+  "max_equity": 10000.0,
+  "min_equity": 10000.0,
+  "open_trades": 0,
+  "closed_trades": 0,
+  "statistics": {
+    "total_trades": 0,
+    "win_rate": 0.0,
+    "avg_r_multiple": 0.0,
+    "total_pnl": 0.0,
+    "profit_factor": 0.0
+  }
+}

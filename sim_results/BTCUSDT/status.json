@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-01-06T23:40:57.350620",
+  "timestamp": "2026-02-03T16:02:06.787633",
   "symbol": "BTCUSDT",
   "mode": "spot",
   "balance": 1000000.0,
@@ -8,7 +8,31 @@
   "min_equity": 1000000.0,
   "last_drawdown_pct": 0.0,
   "trading_halted": false,
-  "open_trades": [],
+  "open_trades": [
+    {
+      "id": "1770151506-0",
+      "time": "2026-02-03T15:45:06.329380",
+      "pattern": "RL_SELL",
+      "side": "SELL",
+      "symbol": "BTCUSDT",
+      "entry": 77153.04063506,
+      "entry_fees": 51.78747703,
+      "stop": 78886.856,
+      "tp": 75399.716,
+      "rr": 1.01,
+      "rr_text": "1.01|1",
+      "risk_pct": 0.25,
+      "size": 1.44190671,
+      "status": "OPEN",
+      "max_drawdown": 0.59,
+      "min_runup": 0.0,
+      "init_stop": 78886.856,
+      "r_per_unit": 1733.815364941969,
+      "session_allowed": null,
+      "timeframe": "1h",
+      "is_historical_training": false
+    }
+  ],
   "closed_trades": [],
   "error": null
 }

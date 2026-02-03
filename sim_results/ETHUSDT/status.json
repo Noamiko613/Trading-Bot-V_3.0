@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-01-06T23:40:58.738796",
+  "timestamp": "2026-02-03T16:02:07.424029",
   "symbol": "ETHUSDT",
   "mode": "spot",
   "balance": 1000000.0,
@@ -8,7 +8,31 @@
   "min_equity": 1000000.0,
   "last_drawdown_pct": 0.0,
   "trading_halted": false,
-  "open_trades": [],
+  "open_trades": [
+    {
+      "id": "1770150916-0",
+      "time": "2026-02-03T15:35:15.713091",
+      "pattern": "RL_BUY",
+      "side": "BUY",
+      "symbol": "ETHUSDT",
+      "entry": 2303.20352735,
+      "entry_fees": 18.57594774,
+      "stop": 2206.69894158,
+      "tp": 2430.30158762,
+      "rr": 1.32,
+      "rr_text": "1.32|1",
+      "risk_pct": 0.25,
+      "size": 25.9055047,
+      "status": "OPEN",
+      "max_drawdown": 0.27,
+      "min_runup": 0.04,
+      "init_stop": 2206.69894158,
+      "r_per_unit": 96.504585768488,
+      "session_allowed": null,
+      "timeframe": "1h",
+      "is_historical_training": false
+    }
+  ],
   "closed_trades": [],
   "error": null
 }

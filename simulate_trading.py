@@ -630,6 +630,17 @@ class TradeSimulator:
                 print(f"[SIM] ⚠️ Error closing stale trade {trade_id[:8] if trade_id else 'unknown'}: {e}")
 
     def _update_open_trades(self):
+        import json
+        import os
+        import time as time_module
+        log_path = r"c:\Users\Mini Echo09\Desktop\Trading-Bot-V_2.0-feature-enhanced-logging-metrics\.cursor\debug.log"
+        # #region agent log
+        try:
+            open_count_before = len(self.open_trades)
+            with open(log_path, 'a') as f:
+                f.write(json.dumps({"id":f"log_{int(time_module.time()*1000)}_update_entry","timestamp":int(time_module.time()*1000),"location":"simulate_trading.py:632","message":"_update_open_trades() entry","data":{"symbol":self.symbol,"open_trades_count":open_count_before},"sessionId":"debug-session","runId":"run1","hypothesisId":"C"}) + "\n")
+        except: pass
+        # #endregion
         # Get price range (high/low/close) for more accurate TP/SL detection
         price_range = self._get_price_range()
         if price_range is None:
@@ -656,8 +667,16 @@ class TradeSimulator:
         price = price_range['close']
         high = price_range['high']
         low = price_range['low']
-        
+        # #region agent log
+        try:
+            with open(log_path, 'a') as f:
+                f.write(json.dumps({"id":f"log_{int(time_module.time()*1000)}_price_data","timestamp":int(time_module.time()*1000),"location":"simulate_trading.py:656","message":"Price data retrieved","data":{"symbol":self.symbol,"price":price,"high":high,"low":low,"open_trades_count":len(self.open_trades)},"sessionId":"debug-session","runId":"run1","hypothesisId":"C,E"}) + "\n")
+        except: pass
+        # #endregion
         remaining_open = []
+        trades_checked = 0
+        trades_hit_tp = 0
+        trades_hit_sl = 0
         for t in self.open_trades:
             # CRITICAL: Only process trades for THIS symbol
             if t.get('symbol') != self.symbol:
@@ -741,8 +760,17 @@ class TradeSimulator:
             # Log when TP/SL is hit
             if hit_sl or hit_tp:
                 reason = "SL" if hit_sl else "TP"
+                trades_hit_sl += 1 if hit_sl else 0
+                trades_hit_tp += 1 if hit_tp else 0
+                # #region agent log
+                try:
+                    with open(log_path, 'a') as f:
+                        f.write(json.dumps({"id":f"log_{int(time_module.time()*1000)}_tp_sl_hit","timestamp":int(time_module.time()*1000),"location":"simulate_trading.py:742","message":"TP/SL hit detected","data":{"symbol":self.symbol,"trade_id":t.get('id','unknown')[:8],"reason":reason,"entry":entry,"stop":stop,"tp":tp,"price":price,"side":side,"hit_sl":hit_sl,"hit_tp":hit_tp},"sessionId":"debug-session","runId":"run1","hypothesisId":"C"}) + "\n")
+                except: pass
+                # #endregion
                 print(f"[TRADE_CLOSE] {self.symbol}: {reason} HIT! Trade {t.get('id', 'unknown')[:8]}... | "
                       f"Entry: ${entry:.2f} | Exit: ${stop if hit_sl else tp:.2f} | Current: ${price:.2f} | Side: {side}")
+            trades_checked += 1
             t['max_drawdown'] = round(max(t.get('max_drawdown', 0.0), adverse), 2)  # FIXED: Format properly
             t['min_runup'] = round(max(t.get('min_runup', 0.0), favorable), 2)  # FIXED: Format properly
 
@@ -855,14 +883,43 @@ class TradeSimulator:
                 remaining_open.append(t)
 
         self.open_trades = remaining_open
+        # #region agent log
+        try:
+            with open(log_path, 'a') as f:
+                f.write(json.dumps({"id":f"log_{int(time_module.time()*1000)}_update_exit","timestamp":int(time_module.time()*1000),"location":"simulate_trading.py:857","message":"_update_open_trades() exit","data":{"symbol":self.symbol,"trades_checked":trades_checked,"trades_hit_tp":trades_hit_tp,"trades_hit_sl":trades_hit_sl,"open_trades_before":open_count_before,"open_trades_after":len(remaining_open),"trades_closed":open_count_before-len(remaining_open)},"sessionId":"debug-session","runId":"run1","hypothesisId":"C"}) + "\n")
+        except: pass
+        # #endregion
 
     def step(self):
+        import json
+        import os
+        import time as time_module
+        log_path = r"c:\Users\Mini Echo09\Desktop\Trading-Bot-V_2.0-feature-enhanced-logging-metrics\.cursor\debug.log"
+        # #region agent log
+        try:
+            open_count_before = len(self.open_trades)
+            with open(log_path, 'a') as f:
+                f.write(json.dumps({"id":f"log_{int(time_module.time()*1000)}_step_entry","timestamp":int(time_module.time()*1000),"location":"simulate_trading.py:859","message":"step() entry","data":{"symbol":self.symbol,"current_step":self.current_step+1,"open_trades_before":open_count_before},"sessionId":"debug-session","runId":"run1","hypothesisId":"B"}) + "\n")
+        except: pass
+        # #endregion
         self.current_step += 1
         # Refresh price data before updating trades
         try:
             self.fetcher.update_initial(limit=10)  # Refresh recent candles
-        except Exception:
+            # #region agent log
+            try:
+                with open(log_path, 'a') as f:
+                    f.write(json.dumps({"id":f"log_{int(time_module.time()*1000)}_price_refresh_ok","timestamp":int(time_module.time()*1000),"location":"simulate_trading.py:863","message":"Price refresh successful","data":{"symbol":self.symbol,"current_step":self.current_step},"sessionId":"debug-session","runId":"run1","hypothesisId":"E"}) + "\n")
+            except: pass
+            # #endregion
+        except Exception as e:
             self._error_streak = getattr(self, '_error_streak', 0) + 1
+            # #region agent log
+            try:
+                with open(log_path, 'a') as f:
+                    f.write(json.dumps({"id":f"log_{int(time_module.time()*1000)}_price_refresh_error","timestamp":int(time_module.time()*1000),"location":"simulate_trading.py:864","message":"Price refresh error","data":{"symbol":self.symbol,"error":str(e),"error_streak":self._error_streak,"current_step":self.current_step},"sessionId":"debug-session","runId":"run1","hypothesisId":"E"}) + "\n")
+            except: pass
+            # #endregion
         # If price feed appears stale or erroring, recreate fetcher
         if getattr(self, '_stale_price_cycles', 0) >= 6 or getattr(self, '_error_streak', 0) >= 5:
             self._refresh_fetcher()
@@ -872,6 +929,13 @@ class TradeSimulator:
             self._last_stale_check = datetime.utcnow()
 
         self._update_open_trades()
+        # #region agent log
+        try:
+            open_count_after = len(self.open_trades)
+            with open(log_path, 'a') as f:
+                f.write(json.dumps({"id":f"log_{int(time_module.time()*1000)}_step_exit","timestamp":int(time_module.time()*1000),"location":"simulate_trading.py:874","message":"step() exit","data":{"symbol":self.symbol,"current_step":self.current_step,"open_trades_before":open_count_before,"open_trades_after":open_count_after,"trades_closed":open_count_before-open_count_after},"sessionId":"debug-session","runId":"run1","hypothesisId":"B"}) + "\n")
+        except: pass
+        # #endregion
         # Check drawdown on every step
         self._check_drawdown_breach()
         self._write_results()

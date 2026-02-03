@@ -1,9 +1,0 @@
-{
-  "episode": 1,
-  "total_timesteps": 350000,
-  "last_checkpoint": "models\\rl_models\\checkpoints\\rl_model_350000_steps.zip",
-  "best_reward": -Infinity,
-  "total_trades": 0,
-  "mode": "training",
-  "timestamp": "2025-12-29T09:53:59.571246"
-}
