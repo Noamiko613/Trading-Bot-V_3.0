@@ -148,10 +148,11 @@ class TrainingState:
         best_reward: float,
         total_trades: int,
         mode: str = "training",
+        learning_rate: Optional[float] = None,
     ):
-        """Save training state"""
+        """Save training state (learning_rate so reports show actual LR when run outside training)."""
         # Preserve existing state fields (like historical_pretraining_completed)
-        self.state.update({
+        update = {
             'episode': episode,
             'total_timesteps': timesteps,
             'last_checkpoint': checkpoint_path,
@@ -159,7 +160,10 @@ class TrainingState:
             'total_trades': total_trades,
             'mode': mode,
             'timestamp': datetime.now().isoformat(),
-        })
+        }
+        if learning_rate is not None:
+            update['learning_rate'] = float(learning_rate)
+        self.state.update(update)
         try:
             with open(self.state_file, 'w') as f:
                 json.dump(self.state, f, indent=2)
@@ -397,6 +401,9 @@ class RLTrainer:
         
         # Dashboard
         self.dashboard = None
+        
+        # Gemini reviewer scheduler (for daily status reviews)
+        self.gemini_reviewer = None
         
         # Environment
         self.env = None
@@ -892,6 +899,24 @@ class RLTrainer:
             self.dashboard.set_model(self.model)
             self.dashboard.start()
             print("[RL] Dashboard started")
+            
+            # Start Gemini reviewer scheduler if API key is available
+            if self.gemini_reviewer is None:
+                try:
+                    from utils.gemini_reviewer import ReviewScheduler
+                    gemini_api_key = os.getenv("GEMINI_API_KEY", "AIzaSyAtxfgJJQT4FnfhTQ5S-5iBKmVOaDy1eQc")
+                    if gemini_api_key:
+                        self.gemini_reviewer = ReviewScheduler(
+                            gemini_api_key=gemini_api_key,
+                            model_dir=str(self.model_dir),
+                            state_file=str(self.model_dir / "rl_training_state.json"),
+                            db_path=self.analytics.db_path,
+                            to_email="noamiko613@gmail.com",
+                        )
+                        self.gemini_reviewer.start()
+                        print("[RL] Gemini reviewer scheduler started (daily reviews at start/middle/end of day)")
+                except Exception as e:
+                    print(f"[RL] Warning: Could not start Gemini reviewer scheduler: {e}")
     
     def _get_env_with_simulator(self, env):
         """Unwrap env until we get TradingEnv (has .simulator). Handles both .unwrapped (Gymnasium) and .env (gym.Wrapper)."""
@@ -1440,8 +1465,9 @@ class RLTrainer:
                                 checkpoint_path = str(checkpoints[-1])
                 
                     # Persist state with the current mode (training or paper) so dashboards/status
-                    # reflect what the loop is actually doing.
+                    # reflect what the loop is actually doing. Include learning_rate so reports show actual LR when run outside training.
                     try:
+                        current_lr = float(getattr(self.model, 'learning_rate', None) or 0)
                         self.state_manager.save_state(
                             episode=episode,
                             timesteps=current_timesteps,
@@ -1449,6 +1475,7 @@ class RLTrainer:
                             best_reward=best_reward,
                             total_trades=total_trades,
                             mode=self.current_mode,
+                            learning_rate=current_lr if current_lr else None,
                         )
                         print(f"[RL] 💾 State saved: Episode {episode}, Timesteps {current_timesteps:,}, Trades {total_trades}")
                         last_state_save = time.time()  # Update heartbeat
@@ -1460,6 +1487,7 @@ class RLTrainer:
                     if time.time() - last_state_save > state_save_interval:
                         try:
                             print(f"[RL] 💓 Heartbeat: Saving state (no training chunk in {state_save_interval//60} minutes)")
+                            current_lr = float(getattr(self.model, 'learning_rate', None) or 0)
                             self.state_manager.save_state(
                                 episode=episode,
                                 timesteps=current_timesteps,
@@ -1467,6 +1495,7 @@ class RLTrainer:
                                 best_reward=best_reward,
                                 total_trades=total_trades,
                                 mode=self.current_mode,
+                                learning_rate=current_lr if current_lr else None,
                             )
                             last_state_save = time.time()
                         except Exception as e:
@@ -2110,6 +2139,7 @@ class RLTrainer:
                     if checkpoints:
                         checkpoint_path = str(checkpoints[-1])
             
+            current_lr = float(getattr(self.model, 'learning_rate', None) or 0) if self.model else None
             self.state_manager.save_state(
                 episode=episode,
                 timesteps=current_timesteps,
@@ -2117,6 +2147,7 @@ class RLTrainer:
                 best_reward=best_reward,
                 total_trades=total_trades,
                 mode=self.current_mode,
+                learning_rate=current_lr if current_lr else None,
             )
             print(f"[RL] Training state saved: Episode {episode}, Timesteps {current_timesteps:,}, Trades {total_trades}")
             print(f"[RL] You can resume training from this checkpoint next time.")

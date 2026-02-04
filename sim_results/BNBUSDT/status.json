@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-02-03T16:02:03.707398",
+  "timestamp": "2026-02-03T17:57:33.757829",
   "symbol": "BNBUSDT",
   "mode": "spot",
   "balance": 1000000.0,
@@ -24,7 +24,7 @@
       "risk_pct": 0.25,
       "size": 97.13130352,
       "status": "OPEN",
-      "max_drawdown": 0.45,
+      "max_drawdown": 0.95,
       "min_runup": 0.07,
       "init_stop": 750.3972677,
       "r_per_unit": 25.738355291033,

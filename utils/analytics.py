@@ -90,48 +90,61 @@ class PerformanceAnalytics:
             return self._empty_metrics()
         
         df = pd.DataFrame(trades)
+        # Normalize column names to lowercase (DB drivers may return different casing)
+        df.columns = [str(c).strip().lower() for c in df.columns]
+        # Coerce pnl to float so largest_win/largest_loss and filters work (e.g. if DB returned string)
+        if 'pnl' in df.columns:
+            df['pnl'] = pd.to_numeric(df['pnl'], errors='coerce').fillna(0.0)
+        
+        # Chronological order for equity curve and drawdown (get_closed_trades returns DESC by default)
+        if 'closed_time' in df.columns:
+            df = df.sort_values('closed_time', ascending=True).reset_index(drop=True)
         
         # Basic metrics
         total_trades = len(df)
-        winning_trades = len(df[df['pnl'] > 0])
-        losing_trades = len(df[df['pnl'] < 0])
-        breakeven_trades = len(df[df['pnl'] == 0])
+        winning_trades = int((df['pnl'] > 0).sum())
+        losing_trades = int((df['pnl'] < 0).sum())
+        breakeven_trades = int((df['pnl'] == 0).sum())
         
         win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
         
         # PnL metrics
-        total_pnl = df['pnl'].sum()
-        avg_pnl = df['pnl'].mean()
+        total_pnl = float(df['pnl'].sum())
+        avg_pnl = float(df['pnl'].mean())
         
-        avg_win = df[df['pnl'] > 0]['pnl'].mean() if winning_trades > 0 else 0
-        avg_loss = df[df['pnl'] < 0]['pnl'].mean() if losing_trades > 0 else 0
+        wins = df[df['pnl'] > 0]['pnl']
+        losses = df[df['pnl'] < 0]['pnl']
+        avg_win = float(wins.mean()) if len(wins) > 0 else 0.0
+        avg_loss = float(losses.mean()) if len(losses) > 0 else 0.0
+        largest_win = float(wins.max()) if len(wins) > 0 else 0.0
+        largest_loss = float(losses.min()) if len(losses) > 0 else 0.0  # min (most negative)
         
         # R-multiple analysis
         if 'r_multiple' in df.columns:
-            avg_r_multiple = df['r_multiple'].mean()
-            expectancy = df['r_multiple'].mean()  # Average R-multiple is expectancy
+            r_mult = pd.to_numeric(df['r_multiple'], errors='coerce').fillna(0)
+            avg_r_multiple = float(r_mult.mean())
+            expectancy = float(r_mult.mean())
         else:
-            avg_r_multiple = 0
-            expectancy = 0
+            avg_r_multiple = 0.0
+            expectancy = 0.0
         
         # Profit factor
-        gross_profit = df[df['pnl'] > 0]['pnl'].sum() if winning_trades > 0 else 0
-        gross_loss = abs(df[df['pnl'] < 0]['pnl'].sum()) if losing_trades > 0 else 0
-        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else 0
+        gross_profit = float(df[df['pnl'] > 0]['pnl'].sum()) if winning_trades > 0 else 0.0
+        gross_loss = float(abs(df[df['pnl'] < 0]['pnl'].sum())) if losing_trades > 0 else 0.0
+        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else 0.0
         
-        # Drawdown analysis - use equity curve approach for more accurate calculation
+        # Drawdown analysis - chronological equity curve (capped at 0 so drawdown % is at most 100%)
         starting_equity = 100000.0  # Default starting balance (can be made configurable)
         cumulative_pnl = df['pnl'].cumsum()
-        equity_curve = starting_equity + cumulative_pnl
+        equity_curve_raw = (starting_equity + cumulative_pnl).values
+        equity_curve = np.maximum(equity_curve_raw, 0.0)
         
-        # Calculate drawdown from equity curve
-        running_max = equity_curve.cummax()
+        running_max = np.maximum.accumulate(equity_curve)
         drawdown = running_max - equity_curve
-        max_drawdown = drawdown.max()
-        # Drawdown as percentage of peak equity
-        max_drawdown_pct = (max_drawdown / running_max.max() * 100) if running_max.max() > 0 else 0.0
+        max_drawdown = float(np.max(drawdown)) if len(drawdown) > 0 else 0.0
+        peak = float(np.max(running_max)) if np.size(running_max) > 0 and np.max(running_max) > 0 else 1.0
+        max_drawdown_pct = min(100.0, (max_drawdown / peak * 100))
         
-        # Ensure we return a valid number (not NaN or inf)
         if not np.isfinite(max_drawdown_pct):
             max_drawdown_pct = 0.0
         if not np.isfinite(max_drawdown):
@@ -141,22 +154,22 @@ class PerformanceAnalytics:
         if len(df) > 1:
             returns = df['pnl'].pct_change().dropna()
             if len(returns) > 0 and returns.std() > 0:
-                sharpe_ratio = (returns.mean() / returns.std()) * np.sqrt(252)
+                sharpe_ratio = float((returns.mean() / returns.std()) * np.sqrt(252))
             else:
-                sharpe_ratio = 0
+                sharpe_ratio = 0.0
         else:
-            sharpe_ratio = 0
+            sharpe_ratio = 0.0
         
         # Sortino ratio (downside deviation)
         if len(df) > 1:
             returns = df['pnl'].pct_change().dropna()
             downside_returns = returns[returns < 0]
             if len(downside_returns) > 0 and downside_returns.std() > 0:
-                sortino_ratio = (returns.mean() / downside_returns.std()) * np.sqrt(252)
+                sortino_ratio = float((returns.mean() / downside_returns.std()) * np.sqrt(252))
             else:
-                sortino_ratio = 0
+                sortino_ratio = 0.0
         else:
-            sortino_ratio = 0
+            sortino_ratio = 0.0
         
         # Consecutive wins/losses
         pnl_signs = (df['pnl'] > 0).astype(int)
@@ -173,6 +186,8 @@ class PerformanceAnalytics:
             'avg_pnl': round(avg_pnl, 2),
             'avg_win': round(avg_win, 2),
             'avg_loss': round(avg_loss, 2),
+            'largest_win': round(largest_win, 2),
+            'largest_loss': round(largest_loss, 2),
             'avg_r_multiple': round(avg_r_multiple, 2),
             'expectancy': round(expectancy, 2),
             'profit_factor': round(profit_factor, 2),
@@ -210,6 +225,8 @@ class PerformanceAnalytics:
             'avg_pnl': 0,
             'avg_win': 0,
             'avg_loss': 0,
+            'largest_win': 0,
+            'largest_loss': 0,
             'avg_r_multiple': 0,
             'expectancy': 0,
             'profit_factor': 0,

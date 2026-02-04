@@ -249,6 +249,7 @@ class TradingEnv(gym.Env):
         self._last_trade_side = None
         self._trades_before_step = 0
         self._last_closed_count = 0  # Track closed trades for reward calculation
+        self._last_close_was_loss = False  # For consecutive-loss penalty in reward
         # Reset cooldown
         self.last_trade_step = -1000
         
@@ -883,30 +884,29 @@ class TradingEnv(gym.Env):
         except Exception:
             pass
 
-        # Reward for closing profitable trades (immediate positive feedback)
-        # Check if any trades were closed in this step
+        # Reward for closing trades: asymmetric win vs loss to improve accuracy (win rate)
         closed_trades_this_step = len(self.simulator.closed_trades) - getattr(self, '_last_closed_count', 0)
         if closed_trades_this_step > 0:
             recent_closed = self.simulator.closed_trades[-closed_trades_this_step:]
             for trade in recent_closed:
                 if trade.get('symbol') == self.symbol:
-                    pnl = trade.get('pnl', 0.0)
-                    r_multiple = trade.get('r_multiple', 0.0)
-                    # Reward based on R-multiple (scaled)
-                    if r_multiple > 0:
-                        reward += min(r_multiple * 0.1, 0.5)  # Cap at 0.5 per trade
-                    elif pnl > 0:
-                        reward += 0.05  # Small reward for any profit
+                    pnl = float(trade.get('pnl', 0.0) or 0.0)
+                    r_multiple = float(trade.get('r_multiple', 0.0) or 0.0)
+                    _reason = str(trade.get('close_reason', ''))
+                    if pnl > 0:
+                        reward += min(r_multiple * 0.15, 0.6) if r_multiple > 0 else 0.12
+                        if _reason == 'TP':
+                            reward += 0.08
                     else:
-                        reward -= 0.1  # Penalty for losses
-                        try:
-                            _reason = str(trade.get('close_reason', ''))
-                            if _reason == 'TP':
-                                reward += 0.05
-                            elif _reason == 'SL':
-                                reward -= 0.05
-                        except Exception:
-                            pass
+                        reward -= 0.22
+                        if _reason == 'SL':
+                            reward -= 0.06
+                        # Consecutive-loss penalty: discourages repeating same mistake
+                        if getattr(self, '_last_close_was_loss', False):
+                            reward -= 0.04
+                        self._last_close_was_loss = True
+                    if pnl > 0:
+                        self._last_close_was_loss = False
         self._last_closed_count = len(self.simulator.closed_trades)
 
         # Penalty for holding positions too long (encourages timely exits)
@@ -954,13 +954,14 @@ class TradingEnv(gym.Env):
             overtrading_penalty = (self.total_trades_executed - 50) * 0.00005
             reward -= overtrading_penalty
         
-        # Bonus for maintaining positive equity (encourages capital preservation)
+        # Bonus for maintaining positive equity; stronger penalty for drawdown (risk management)
         if current_equity > self.starting_balance:
-            equity_bonus = (current_equity - self.starting_balance) / self.starting_balance * 0.1
+            equity_bonus = (current_equity - self.starting_balance) / self.starting_balance * 0.12
             reward += equity_bonus
-        elif current_equity < self.starting_balance * 0.9:
-            # Strong penalty for significant drawdown
-            drawdown_penalty = (0.9 - (current_equity / self.starting_balance)) * 0.5
+        elif current_equity < self.starting_balance * 0.95:
+            # Progressive drawdown penalty so agent learns to cut losses and preserve capital
+            drawdown_ratio = 1.0 - (current_equity / self.starting_balance)
+            drawdown_penalty = min(1.0, drawdown_ratio * 1.2)  # Cap so one step isn't overwhelming
             reward -= drawdown_penalty
 
         # Clip reward to reasonable range (wider for more signal)

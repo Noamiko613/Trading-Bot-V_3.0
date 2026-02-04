@@ -189,7 +189,7 @@ class MultiMetricEvaluator:
         
         # Fix max_drawdown_pct calculation - if it's 0 but we have trades, recalculate
         if metrics.get('max_drawdown_pct', 0.0) == 0.0 and len(valid_trades) > 0:
-            # Recalculate drawdown from equity curve
+            # Recalculate drawdown from equity curve (cap equity at 0 so drawdown % at most 100%)
             starting_equity = 100000.0  # Default starting balance
             cumulative_pnl = 0.0
             equity_curve = [starting_equity]
@@ -197,13 +197,13 @@ class MultiMetricEvaluator:
             sorted_trades = sorted(valid_trades, key=lambda t: t.get('closed_time', ''))
             for trade in sorted_trades:
                 cumulative_pnl += trade.get('pnl', 0.0)
-                equity_curve.append(starting_equity + cumulative_pnl)
+                equity_curve.append(max(0.0, starting_equity + cumulative_pnl))
             
             if len(equity_curve) > 1:
                 equity_array = np.array(equity_curve)
                 running_max = np.maximum.accumulate(equity_array)
-                drawdowns = (running_max - equity_array) / running_max * 100.0
-                max_dd = float(np.max(drawdowns)) if len(drawdowns) > 0 else 0.0
+                drawdowns = (running_max - equity_array) / np.maximum(running_max, 1.0) * 100.0
+                max_dd = min(100.0, float(np.max(drawdowns)) if len(drawdowns) > 0 else 0.0)
                 metrics['max_drawdown_pct'] = max_dd
         
         # Check all thresholds

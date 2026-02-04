@@ -228,7 +228,7 @@ class RLDashboard:
                 self.stats['state_load_error'] = str(e)
                 pass
         
-        # Try to read learning_rate from model if available
+        # Try to read learning_rate from model if available; else from state (so reports show actual LR when run outside training)
         if self.model is not None:
             try:
                 if hasattr(self.model, 'learning_rate'):
@@ -243,6 +243,11 @@ class RLDashboard:
                         pass
             except Exception:
                 pass  # Keep default 0.0 if can't read
+        elif self.state and self.stats.get('learning_rate', 0) == 0:
+            # Report/standalone run: use last saved LR from state so Gemini review doesn't show 0
+            lr = self.state.get('learning_rate')
+            if lr is not None and float(lr) != 0:
+                self.stats['learning_rate'] = float(lr)
         
         # Get trades from database (both open and closed)
         # Include ALL trades (historical + live) to calculate PPO model's overall accuracy
